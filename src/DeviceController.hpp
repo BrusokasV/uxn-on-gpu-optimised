@@ -3,6 +3,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <string>
 
 #define LOG(s) if(debug) std::cout << s << std::endl
 

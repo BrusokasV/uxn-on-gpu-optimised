@@ -4,6 +4,7 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <cstring>
 #include <thread>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -319,7 +320,7 @@ public:
     };
     const size_t VERTICES_SIZE = sizeof(Vertex) * vertices.size();
     std::vector<const char*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
-    std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, "VK_KHR_portability_subset" };
+    std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
     DeviceController(bool enableValidationLayers, Uxn* uxn, Console* console) {
         this->debug = enableValidationLayers;

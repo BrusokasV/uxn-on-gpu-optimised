@@ -1,5 +1,7 @@
 #ifndef UXN_H
 #define UXN_H
+#include <unordered_map>
+#include <array>
 #include <glm/glm.hpp>
 #include "Resource.hpp"
 #include "Console.hpp"
