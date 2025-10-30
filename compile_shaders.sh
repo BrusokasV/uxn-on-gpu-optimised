@@ -13,7 +13,13 @@ for shader in $UXN_SHADERS; do
   glslangValidator -V --target-env vulkan1.2 "${shader}".comp -o "${shader}".spv
 
   # Patch the shader
-  spirv-as  --target-env vulkan1.2 <(sed -f shader_patch.sed <(spirv-dis "${shader}".spv)) -o "${shader}".spv
+  # spirv-as  --target-env vulkan1.2 <(sed -f shader_patch.sed <(spirv-dis "${shader}".spv)) -o "${shader}".spv
+
+  # Amended code so that patching works on Windows
+  spirv-dis "${shader}".spv -o "${shader}".tmp.txt
+  sed -f shader_patch.sed "${shader}".tmp.txt > "${shader}".patched.txt
+  spirv-as --target-env vulkan1.2 "${shader}".patched.txt -o "${shader}".spv
+  rm "${shader}".tmp.txt "${shader}".patched.txt
 
   # storing the spir-v disassembly
   #spirv-dis "${shader}".spv -o "${shader}".spv.txt
