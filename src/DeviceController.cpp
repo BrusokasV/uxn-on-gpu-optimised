@@ -333,9 +333,16 @@ public:
     void run() {
         if (logMetrics) logger.logStart();
         LOG("Starting VM execution:");
+        auto vm_start_time = std::chrono::steady_clock::now();
         mainLoop();
+        auto vm_end_time = std::chrono::steady_clock::now();
+        vm_runtime_total = std::chrono::duration_cast<std::chrono::nanoseconds>(vm_end_time - vm_start_time);
         if (logMetrics) logger.logEnd();
         if (logMetrics) logger.printMetrics();
+        std::cout << "Average device-to-host time: " << dth_total / dth_num << ", Percentage of total runtime: " << (dth_total.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+        std::cout << "Block 1: " << dth1_total / dth_num << " Block 2: " << dth2_total / dth_num << " Block 3: " << dth3_total / dth_num << " Block 4: " << dth4_total / dth_num << " Block 5: " << dth5_total / dth_num << std::endl;
+        std::cout << "Average host-to-device time: " << htd_total / htd_num << ", Percentage of total runtime: " << (htd_total.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+        std::cout << "Block 1: " << htd1_total / htd_num << " Block 2: " << htd2_total / htd_num << std::endl;
         cleanup();
     }
 private:
@@ -377,6 +384,19 @@ private:
     VkFence computeInFlightFence;
     VkFence uxnEvaluationFence;
     VkFence blitFence;
+
+    std::chrono::nanoseconds vm_runtime_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds dth_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds dth1_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds dth2_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds dth3_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds dth4_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds dth5_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds htd_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds htd1_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds htd2_total = std::chrono::nanoseconds::zero();
+    int dth_num = 0;
+    int htd_num = 0;
 
     bool checkValidationLayerSupport() {
         uint32_t layerCount;
@@ -1064,28 +1084,51 @@ private:
     }
 
     void copyDeviceMemToHost(UxnMemory* target) {
+        auto init_time = std::chrono::steady_clock::now();
         // copy from ssbo buffer to host staging buffer
         auto size = sharedUxnResource.data.buffer.size;
         copyBuffer(ctx, sharedUxnResource.data.buffer._, hostDestBuffer, size);
-
+        
+        auto end1_time = std::chrono::steady_clock::now();
         void* data;
         if (vkMapMemory(ctx.device, hostDestMemory, 0, size, 0, &data) != VK_SUCCESS) {
             std::cerr << "Failed to map memory!" << std::endl;
             return;
         }
 
+        auto end2_time = std::chrono::steady_clock::now();
+
         auto* mappedMemory = static_cast<UxnMemory*>(data);
         memset(&target->shared, 0, size);
+
+        auto end3_time = std::chrono::steady_clock::now();
         memcpy(&target->shared, mappedMemory, size);
+
+        auto end4_time = std::chrono::steady_clock::now();
         vkUnmapMemory(ctx.device, hostDestMemory);
+        auto end5_time = std::chrono::steady_clock::now();
+        dth_total += std::chrono::duration_cast<std::chrono::nanoseconds>(end5_time - init_time);
+        dth1_total += std::chrono::duration_cast<std::chrono::nanoseconds>(end1_time - init_time);
+        dth2_total += std::chrono::duration_cast<std::chrono::nanoseconds>(end2_time - end1_time);
+        dth3_total += std::chrono::duration_cast<std::chrono::nanoseconds>(end3_time - end2_time);
+        dth4_total += std::chrono::duration_cast<std::chrono::nanoseconds>(end4_time - end3_time);
+        dth5_total += std::chrono::duration_cast<std::chrono::nanoseconds>(end5_time - end4_time);
+        dth_num++;
     }
 
     void copyHostMemToDevice(const UxnMemory* source) {
+        auto init_time = std::chrono::steady_clock::now();
         // copy data to staging buffer
         memcpy(hostSrcP, &source->shared, sizeof(UxnMemory::shared));
+        auto end1_time = std::chrono::steady_clock::now();
 
         // copy from host staging buffer to ssbo buffer
         copyBuffer(ctx, hostSrcBuffer, sharedUxnResource.data.buffer._, sizeof(UxnMemory::shared));
+        auto end2_time = std::chrono::steady_clock::now();
+        htd_total += std::chrono::duration_cast<std::chrono::nanoseconds>(end2_time - init_time);
+        htd1_total += std::chrono::duration_cast<std::chrono::nanoseconds>(end1_time - init_time);
+        htd2_total += std::chrono::duration_cast<std::chrono::nanoseconds>(end2_time - end1_time);
+        htd_num++;
     }
 
     void recordGraphicsCommandBuffer(VkCommandBuffer cmdBuffer, uint32_t imageIndex) {
