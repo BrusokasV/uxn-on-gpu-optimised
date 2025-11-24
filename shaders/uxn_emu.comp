@@ -8,6 +8,14 @@
 // think of this as a soft timeout
 // uncomment this line if you are getting VK_TIMEOUT errors
 //#define MAX_STEPS 100000
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_ARB_gpu_shader_int64 : enable
+
+// Add this buffer reference type
+layout(buffer_reference, scalar) buffer BooleanBuffer {
+    uint booleans[2];  // using uint as GLSL doesn't have bool in buffer_reference
+};
 
 layout(std140, binding = 0) buffer Shared_UXN_Buffer {
     uint pc;
@@ -23,6 +31,10 @@ layout(std140, binding = 1) buffer Private_UXN_Buffer {
     uint rst[256];  // return stack
     uint pRst;
 } uxn;
+
+layout(push_constant) uniform PushConstants {
+    uint64_t booleanBufferAddress;
+} pushConstants;
 
 layout (local_size_x = 1) in;
 
@@ -325,6 +337,14 @@ void main() {
     State state = {0, 0, 0, uvec2(0,0), uvec2(0,0), uvec2(0,0)};
     shared_uxn.flags = 0;
     shared_uxn.halt = 0;
+
+    BooleanBuffer boolBuf = BooleanBuffer(pushConstants.booleanBufferAddress);
+    if (boolBuf.booleans[0] != 0) {  // Check first boolean
+        boolBuf.booleans[1] = 1;      // Set second boolean to true
+    }
+    else {
+        boolBuf.booleans[1] = 0;
+    }
 
     // Run the next Uxn instruction
     // possible halt codes:
