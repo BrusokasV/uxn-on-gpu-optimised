@@ -12,29 +12,28 @@
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_ARB_gpu_shader_int64 : enable
 
-// Add this buffer reference type
-layout(buffer_reference, scalar) buffer BooleanBuffer {
-    uint booleans[2];  // using uint as GLSL doesn't have bool in buffer_reference
-};
-
-layout(std140, binding = 0) buffer Shared_UXN_Buffer {
+layout(buffer_reference, scalar) buffer Shared_UXN_Buffer {
     uint pc;
     uint dev[256];  // device data
     uint flags;
     uint halt;
-} shared_uxn;
+};
 
-layout(std140, binding = 1) buffer Private_UXN_Buffer {
+layout(buffer_reference, scalar) buffer Private_UXN_Buffer {
     uint ram[65536];
     uint wst[256];  // working stack
     uint pWst;
     uint rst[256];  // return stack
     uint pRst;
-} uxn;
+};
 
 layout(push_constant) uniform PushConstants {
-    uint64_t booleanBufferAddress;
+    uint64_t sharedUxnAddress;
+    uint64_t privateUxnAddress;
 } pushConstants;
+
+Shared_UXN_Buffer shared_uxn = Shared_UXN_Buffer(pushConstants.sharedUxnAddress);
+Private_UXN_Buffer uxn = Private_UXN_Buffer(pushConstants.privateUxnAddress);
 
 layout (local_size_x = 1) in;
 
@@ -337,14 +336,6 @@ void main() {
     State state = {0, 0, 0, uvec2(0,0), uvec2(0,0), uvec2(0,0)};
     shared_uxn.flags = 0;
     shared_uxn.halt = 0;
-
-    BooleanBuffer boolBuf = BooleanBuffer(pushConstants.booleanBufferAddress);
-    if (boolBuf.booleans[0] != 0) {  // Check first boolean
-        boolBuf.booleans[1] = 1;      // Set second boolean to true
-    }
-    else {
-        boolBuf.booleans[1] = 0;
-    }
 
     // Run the next Uxn instruction
     // possible halt codes:

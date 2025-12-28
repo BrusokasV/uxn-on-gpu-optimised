@@ -2,6 +2,7 @@
 #include "DeviceController.hpp"
 #include <fstream>
 #include <iostream>
+#include <iomanip>
 #include <set>
 #include <string>
 #include <cstring>
@@ -23,8 +24,6 @@ int WIDTH = 512;
 int HEIGHT = 512;
 
 // -- Bindings --
-#define SHARED_UXN_BINDING          0
-#define PRIVATE_UXN_BINDING         1
 #define BACKGROUND_IMAGE_BINDING    2
 #define BACKGROUND_SAMPLER_BINDING  4
 #define FOREGROUND_IMAGE_BINDING    3
@@ -334,17 +333,18 @@ public:
         if (logMetrics) logger.logStart();
         LOG("Starting VM execution:");
         mainLoop();
-        vm_runtime_total = eval_time + clear_time + blit_time + copy_time + IO_time + graphics_time + callback_time + new_mem_time;
         if (logMetrics) logger.logEnd();
         if (logMetrics) logger.printMetrics();
-        std::cout << "Average callback time: " << callback_time / callback_num << ", Percentage of total runtime: " << (callback_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-        std::cout << "Average eval time: " << eval_time / iter_num << ", Percentage of total runtime: " << (eval_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-        std::cout << "Average clear time: " << clear_time / iter_num << ", Percentage of total runtime: " << (clear_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-        std::cout << "Average blit time: " << blit_time / iter_num << ", Percentage of total runtime: " << (blit_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-        std::cout << "Average copy time: " << copy_time / iter_num << ", Percentage of total runtime: " << (copy_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-        std::cout << "Average IO time: " << IO_time / iter_num << ", Percentage of total runtime: " << (IO_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-        std::cout << "Average graphics time: " << graphics_time / iter_num << ", Percentage of total runtime: " << (graphics_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-        std::cout << "Average new mem time: " << new_mem_time / iter_num << ", Percentage of total runtime: " << (new_mem_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+        if (logMetrics) {
+            vm_runtime_total = poll_time + callback_time + eval_time + clear_time + blit_time + io_time + graphics_time;
+            std::cout << "Poll percentage of total runtime: " << (poll_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "Callback percentage of total runtime: " << (callback_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "Eval percentage of total runtime: " << (eval_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "Clear percentage of total runtime: " << (clear_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "Blit percentage of total runtime: " << (blit_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "IO percentage of total runtime: " << (io_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "Graphics percentage of total runtime: " << (graphics_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+        }
         cleanup();
     }
 private:
@@ -368,22 +368,16 @@ private:
     DescriptorSetWrapper uxnDescriptorSet;
     DescriptorSetWrapper blitDescriptorSet;
     DescriptorSetWrapper graphicsDescriptorSet;
-    Resource sharedUxnResource;
-    Resource privateUxnResource;
     Resource backgroundImageResource;
     Resource foregroundImageResource;
     Resource vertexResource;
 
-    VkBuffer booleanBuffer;
-    VkDeviceMemory booleanMemory;
-    VkDeviceAddress booleanBufferAddress;
-    uint32_t booleanData[2] = {0, 0};
-
-    VkBuffer hostDestBuffer;
-    VkDeviceMemory hostDestMemory;
-    VkBuffer hostSrcBuffer;
-    VkDeviceMemory hostSrcMemory;
-    void* hostSrcP;
+    VkBuffer fastSharedBuffer;
+    VkDeviceMemory fastSharedMemory;
+    VkDeviceAddress fastSharedAddress;
+    VkBuffer fastPrivateBuffer;
+    VkDeviceMemory fastPrivateMemory;
+    VkDeviceAddress fastPrivateAddress;
 
     VkSemaphore imageAvailableSemaphore;
     VkSemaphore renderFinishedSemaphore;
@@ -393,15 +387,13 @@ private:
     VkFence blitFence;
 
     std::chrono::nanoseconds vm_runtime_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds poll_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds callback_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds eval_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds clear_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds blit_time = std::chrono::nanoseconds::zero();
-    std::chrono::nanoseconds copy_time = std::chrono::nanoseconds::zero();
-    std::chrono::nanoseconds IO_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds io_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds graphics_time = std::chrono::nanoseconds::zero();
-    std::chrono::nanoseconds callback_time = std::chrono::nanoseconds::zero();
-    std::chrono::nanoseconds new_mem_time = std::chrono::nanoseconds::zero();
-    int callback_num = 0;
     int iter_num = 0;
 
     bool checkValidationLayerSupport() {
@@ -558,6 +550,11 @@ private:
 
         // Specify used device features
         VkPhysicalDeviceFeatures deviceFeatures{};
+        deviceFeatures.shaderInt64 = VK_TRUE;
+
+        VkPhysicalDeviceVulkan12Features vulkan12Features{};
+        vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        vulkan12Features.bufferDeviceAddress = VK_TRUE;
 
         VkDeviceCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -567,7 +564,7 @@ private:
         createInfo.pEnabledFeatures = &deviceFeatures;
         createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
         createInfo.ppEnabledExtensionNames = deviceExtensions.data();
-        createInfo.pNext = nullptr;
+        createInfo.pNext = &vulkan12Features;
 
         if (debug) {
             createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
@@ -957,7 +954,7 @@ private:
         VkPushConstantRange pushConstantRange{};
         pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pushConstantRange.offset = 0;
-        pushConstantRange.size = sizeof(VkDeviceAddress);
+        pushConstantRange.size = sizeof(VkDeviceAddress)*2;
 
         std::vector<char> compShaderCode(shaderCode, shaderCode + shaderLen);
         VkShaderModule compShaderModule = createShaderModule(compShaderCode, ctx.device);
@@ -997,23 +994,24 @@ private:
         blitDescriptorSet = DescriptorSetWrapper();
         graphicsDescriptorSet = DescriptorSetWrapper();
 
-        // resource creation
-        sharedUxnResource = Resource(ctx, SHARED_UXN_BINDING, &uxnDescriptorSet,
-            sizeof(UxnMemory::shared), &uxn->memory->shared,
-            true, false, true);
-        privateUxnResource = Resource(ctx, PRIVATE_UXN_BINDING, &uxnDescriptorSet,
-            sizeof(UxnMemory::_private), &uxn->memory->_private,
-            true, false, false);
-
-        createBuffer(ctx, sizeof(booleanData), 
+        // buffers accessible through device addresses
+        createBuffer(ctx, sizeof(UxnMemory::shared), 
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR, 
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
-            booleanBuffer, booleanMemory);
+            fastSharedBuffer, fastSharedMemory);
 
-        // Get device address
-        VkBufferDeviceAddressInfoKHR boolAddressInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
-        boolAddressInfo.buffer = booleanBuffer;
-        booleanBufferAddress = vkGetBufferDeviceAddress(ctx.device, &boolAddressInfo);
+        VkBufferDeviceAddressInfoKHR fastSharedInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
+        fastSharedInfo.buffer = fastSharedBuffer;
+        fastSharedAddress = vkGetBufferDeviceAddress(ctx.device, &fastSharedInfo);
+
+        createBuffer(ctx, sizeof(UxnMemory::_private), 
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR, 
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+            fastPrivateBuffer, fastPrivateMemory);
+
+        VkBufferDeviceAddressInfoKHR fastPrivateInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
+        fastPrivateInfo.buffer = fastPrivateBuffer;
+        fastPrivateAddress = vkGetBufferDeviceAddress(ctx.device, &fastPrivateInfo);
 
         backgroundImageResource = Resource(ctx, BACKGROUND_IMAGE_BINDING, BACKGROUND_SAMPLER_BINDING,
             &blitDescriptorSet, &graphicsDescriptorSet, {uxn_width, uxn_height, 0});
@@ -1026,19 +1024,6 @@ private:
         uxnDescriptorSet.initialise(ctx);
         blitDescriptorSet.initialise(ctx);
         graphicsDescriptorSet.initialise(ctx);
-
-        // host staging buffer
-        createBuffer(ctx, sizeof(UxnMemory::shared),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            hostDestBuffer, hostDestMemory);
-        createBuffer(ctx, sizeof(UxnMemory::shared),
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            hostSrcBuffer, hostSrcMemory);
-        if (vkMapMemory(ctx.device, hostSrcMemory, 0, sizeof(UxnMemory::shared), 0, &hostSrcP) != VK_SUCCESS) {
-            std::cerr << "Failed to map memory!" << std::endl;
-        }
     }
 
     void initSync() {
@@ -1106,29 +1091,52 @@ private:
         initSync();
     }
 
-    void copyDeviceMemToHost(UxnMemory* target) {
-        // copy from ssbo buffer to host staging buffer
-        auto size = sharedUxnResource.data.buffer.size;
-        copyBuffer(ctx, sharedUxnResource.data.buffer._, hostDestBuffer, size);
+    void fastCopyDeviceMemToHost(UxnMemory* target) {
+        auto size = sizeof(UxnMemory::shared);       
         
         void* data;
-        if (vkMapMemory(ctx.device, hostDestMemory, 0, size, 0, &data) != VK_SUCCESS) {
+        if (vkMapMemory(ctx.device, fastSharedMemory, 0, size, 0, &data) != VK_SUCCESS) {
             std::cerr << "Failed to map memory!" << std::endl;
             return;
         }
-
-        auto* mappedMemory = static_cast<UxnMemory*>(data);
-        memset(&target->shared, 0, size);
-        memcpy(&target->shared, mappedMemory, size);
-        vkUnmapMemory(ctx.device, hostDestMemory);
+        memcpy(&target->shared, data, size);
+        vkUnmapMemory(ctx.device, fastSharedMemory);
     }
 
-    void copyHostMemToDevice(const UxnMemory* source) {
-        // copy data to staging buffer
-        memcpy(hostSrcP, &source->shared, sizeof(UxnMemory::shared));
+    void fastCopyHostMemToDevice(const UxnMemory* source) {
+        auto size = sizeof(UxnMemory::shared);       
+        
+        void* data;
+        if (vkMapMemory(ctx.device, fastSharedMemory, 0, size, 0, &data) != VK_SUCCESS) {
+            std::cerr << "Failed to map memory!" << std::endl;
+            return;
+        }
+        memcpy(data, &source->shared, size);
+        vkUnmapMemory(ctx.device, fastSharedMemory);
+    }
 
-        // copy from host staging buffer to ssbo buffer
-        copyBuffer(ctx, hostSrcBuffer, sharedUxnResource.data.buffer._, sizeof(UxnMemory::shared));
+    void fastCopyPrivateDeviceMemToHost(UxnMemory* target) {
+        auto size = sizeof(UxnMemory::_private);       
+        
+        void* data;
+        if (vkMapMemory(ctx.device, fastPrivateMemory, 0, size, 0, &data) != VK_SUCCESS) {
+            std::cerr << "Failed to map memory!" << std::endl;
+            return;
+        }
+        memcpy(&target->_private, data, size);
+        vkUnmapMemory(ctx.device, fastPrivateMemory);
+    }
+
+    void fastCopyPrivateHostMemToDevice(const UxnMemory* source) {
+        auto size = sizeof(UxnMemory::_private);       
+        
+        void* data;
+        if (vkMapMemory(ctx.device, fastPrivateMemory, 0, size, 0, &data) != VK_SUCCESS) {
+            std::cerr << "Failed to map private memory!" << std::endl;
+            return;
+        }
+        memcpy(data, &source->_private, size);
+        vkUnmapMemory(ctx.device, fastPrivateMemory);
     }
 
     void recordGraphicsCommandBuffer(VkCommandBuffer cmdBuffer, uint32_t imageIndex) {
@@ -1248,10 +1256,18 @@ private:
         vkCmdBindDescriptorSets(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEvaluatePipelineLayout,
             0,1, &uxnDescriptorSet.set, 0, nullptr);
 
+        struct PushConstantData {
+            VkDeviceAddress sharedUxnAddress;
+            VkDeviceAddress privateUxnAddress;
+        } pushData;
+
+        pushData.sharedUxnAddress = fastSharedAddress;
+        pushData.privateUxnAddress = fastPrivateAddress;
+
         vkCmdPushConstants(computeCommandBuffer, uxnEvaluatePipelineLayout, 
             VK_SHADER_STAGE_COMPUTE_BIT, 
-            0, sizeof(VkDeviceAddress), 
-            &booleanBufferAddress);
+            0, sizeof(PushConstantData), 
+            &pushData);
 
         vkCmdDispatch(computeCommandBuffer, 1, 1, 1);
 
@@ -1377,46 +1393,34 @@ private:
         auto last_frame_time = std::chrono::steady_clock::now();
         auto current_vector = uxn_device::Null;
         int callback_index = 0;
-        
-        uint32_t* mappedBooleans;
-        vkMapMemory(ctx.device, booleanMemory, 0, sizeof(booleanData), 0, (void**)&mappedBooleans);
-        mappedBooleans[0] = 0;  // Invert first boolean
-        mappedBooleans[1] = 0;  // Initialize second to false
-        vkUnmapMemory(ctx.device, booleanMemory);
 
-        uint32_t* resultBooleans;
-        uint32_t temp_res;
+        fastCopyPrivateHostMemToDevice(uxn->memory);
+        fastCopyHostMemToDevice(uxn->memory);
 
         while (!glfwWindowShouldClose(ctx.window) && !uxn->programTerminated()) {
+            iter_num++;
+            auto prev_time = std::chrono::steady_clock::now();
+
             glfwPollEvents();
 
+            poll_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
+            prev_time = std::chrono::steady_clock::now();
+
             if (!in_vector) {
-                auto init_time = std::chrono::steady_clock::now();
-                callback_num++;
                 // pick a new vector to execute
                 auto callback = CALLBACK_DEVICES[callback_index];
                 if (uxn->deviceCallbackVectors.contains(callback) && doCallback(callback, did_graphics)) {
                     uxn->prepareCallback(callback);
-                    copyHostMemToDevice(uxn->memory);
+                    callback_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
+                    fastCopyHostMemToDevice(uxn->memory);
                     in_vector = true;
                     current_vector = callback;
                 }
                 callback_index = (callback_index + 1) % static_cast<int>(CALLBACK_DEVICES.size());
-                callback_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - init_time);
             }
-            auto prev_time = std::chrono::steady_clock::now();
+            prev_time = std::chrono::steady_clock::now();
 
             if (in_vector) {
-                iter_num++;
-                prev_time = std::chrono::steady_clock::now();
-                // To set the first boolean to true before dispatch:
-                vkMapMemory(ctx.device, booleanMemory, 0, sizeof(booleanData), 0, (void**)&mappedBooleans);
-                mappedBooleans[0] = (mappedBooleans[0] - 1) * (-1);  // Invert first boolean
-                //std::cout << "mb[0]: " << mappedBooleans[0] << ", mb[1]: " << mappedBooleans[1] << std::endl;
-                vkUnmapMemory(ctx.device, booleanMemory);
-                new_mem_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
-                prev_time = std::chrono::steady_clock::now();
-
                 // compute steps
                 uxnEvalShader();
                 eval_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
@@ -1426,7 +1430,7 @@ private:
                 // the issue is: we need to clear the screen before we draw to it,
                 // and we should only draw onto the screen if it has been drawn
                 if (!cleared) {
-                    copyDeviceMemToHost(uxn->memory);
+                    fastCopyDeviceMemToHost(uxn->memory);
                     if (uxn->maskFlag(DRAW_PIXEL_FLAG) || uxn->maskFlag(DRAW_SPRITE_FLAG)) {
                         cleared = true;
                         clearImage(nullptr);
@@ -1437,10 +1441,9 @@ private:
                 blitShader();
                 blit_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
                 prev_time = std::chrono::steady_clock::now();
-                copyDeviceMemToHost(uxn->memory);
-                copy_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
-                prev_time = std::chrono::steady_clock::now();
+                fastCopyDeviceMemToHost(uxn->memory);
                 uxn->handleUxnIO();
+                io_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
 
                 // decide if the vector is finished
                 halt_code = uxn->memory->shared.halt;
@@ -1449,16 +1452,6 @@ private:
                     in_vector = false;
                     if (current_vector == uxn_device::Screen) { did_graphics = true; }
                 }
-                IO_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
-                prev_time = std::chrono::steady_clock::now();
-
-                // After vkQueueWaitIdle or fence wait:
-                vkMapMemory(ctx.device, booleanMemory, 0, sizeof(booleanData), 0, (void**)&resultBooleans);
-                //std::cout << "rb[0]: " << resultBooleans[0] << ", rb[1]: " << resultBooleans[1] << std::endl;
-                temp_res = resultBooleans[1];
-                vkUnmapMemory(ctx.device, booleanMemory);
-                new_mem_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
-                prev_time = std::chrono::steady_clock::now();
 
                 LOG("VM halted: halt_code=" << halt_code
                     << ", current_vector=0x" << std::hex << static_cast<int>(current_vector)
@@ -1470,6 +1463,7 @@ private:
                     << ", " << uxn->memory->_private.ram[uxn->memory->shared.pc-3]
                     << std::dec);
             }
+            prev_time = std::chrono::steady_clock::now();
 
             // graphics step: only enter if it is time to draw a frame again (60 FPS)
             auto now_time = std::chrono::steady_clock::now();
@@ -1485,12 +1479,12 @@ private:
                 did_graphics = false;
                 cleared = false;
             }
-            graphics_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - now_time);
+            graphics_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
             if (!in_vector) current_vector = uxn_device::Null;
 
             // check if crashed
             if (halt_code == 4) {
-                copyHostMemToDevice(uxn->memory);
+                fastCopyHostMemToDevice(uxn->memory);
                 std::cerr << "Estimated last opcode before crash: 0x" << std::hex
                           << uxn->memory->_private.ram[uxn->memory->shared.pc-1]
                           << std::dec << "\n";
@@ -1510,19 +1504,16 @@ private:
         uxnDescriptorSet.destroy(ctx);
         blitDescriptorSet.destroy(ctx);
         graphicsDescriptorSet.destroy(ctx);
-        vkUnmapMemory(ctx.device, hostSrcMemory);
-        vkDestroyBuffer(ctx.device, hostDestBuffer, nullptr);
-        vkFreeMemory(ctx.device, hostDestMemory, nullptr);
-        vkDestroyBuffer(ctx.device, hostSrcBuffer, nullptr);
-        vkFreeMemory(ctx.device, hostSrcMemory, nullptr);
+        vkDestroyBuffer(ctx.device, fastSharedBuffer, nullptr);
+        vkFreeMemory(ctx.device, fastSharedMemory, nullptr);
+        vkDestroyBuffer(ctx.device, fastPrivateBuffer, nullptr);
+        vkFreeMemory(ctx.device, fastPrivateMemory, nullptr);
         vkDestroySemaphore(ctx.device, renderFinishedSemaphore, nullptr);
         vkDestroySemaphore(ctx.device, imageAvailableSemaphore, nullptr);
         vkDestroyFence(ctx.device, graphicsFence, nullptr);
         vkDestroyFence(ctx.device, computeInFlightFence, nullptr);
         vkDestroyFence(ctx.device, uxnEvaluationFence, nullptr);
         vkDestroyFence(ctx.device, blitFence, nullptr);
-        sharedUxnResource.destroy();
-        privateUxnResource.destroy();
         backgroundImageResource.destroy();
         foregroundImageResource.destroy();
         vertexResource.destroy();

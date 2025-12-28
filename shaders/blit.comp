@@ -1,19 +1,30 @@
 #version 450
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_ARB_gpu_shader_int64 : enable
 
-layout(std140, set = 0, binding = 0) buffer Shared_UXN_Buffer {
+layout(buffer_reference, scalar) buffer Shared_UXN_Buffer {
     uint pc;
     uint dev[256];  // device data
     uint flags;
     uint halt;
-} shared_uxn;
+};
 
-layout(std140, set = 0, binding = 1) buffer Private_UXN_Buffer {
+layout(buffer_reference, scalar) buffer Private_UXN_Buffer {
     uint ram[65536];
     uint wst[256];  // working stack
     uint pWst;
     uint rst[256];  // return stack
     uint pRst;
-} uxn;
+};
+
+layout(push_constant) uniform PushConstants {
+    uint64_t sharedUxnAddress;
+    uint64_t privateUxnAddress;
+} pushConstants;
+
+Shared_UXN_Buffer shared_uxn = Shared_UXN_Buffer(pushConstants.sharedUxnAddress);
+Private_UXN_Buffer uxn = Private_UXN_Buffer(pushConstants.privateUxnAddress);
 
 layout(set = 1, binding = 2, rgba8) uniform image2D background;
 layout(set = 1, binding = 3, rgba8) uniform image2D foreground;
@@ -178,6 +189,7 @@ void main() {
                                          : colour_1bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0);
 
             if(v_colour == vec4(0, 0, 0, 0)) { continue; }
+            // ToDo - this is incorrect, as this prevents uxn from erasing old sprites. e.g. dvd and snake use that for clearing.
 
             if (layer_is_foreground) {
                 imageStore(foreground, coords + o, v_colour);
