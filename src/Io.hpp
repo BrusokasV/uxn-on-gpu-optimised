@@ -32,4 +32,8 @@ void mouseToUxnMemory(UxnMemory* memory);
 
 void keyboardToUxnMemory(UxnMemory* memory);
 
+bool safeMouseUsed();
+
+bool safeKeyboardUsed();
+
 #endif //IO_HPP

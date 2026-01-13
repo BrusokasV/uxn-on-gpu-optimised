@@ -332,7 +332,14 @@ public:
     void run() {
         if (logMetrics) logger.logStart();
         LOG("Starting VM execution:");
-        mainLoop();
+
+        std::thread event_thread(&DeviceController::mainLoop, this);
+        eventLoop();
+        event_thread.join();
+
+
+        // mainLoop();
+
         if (logMetrics) logger.logEnd();
         if (logMetrics) logger.printMetrics();
         if (logMetrics) {
@@ -340,10 +347,12 @@ public:
             std::cout << "Poll percentage of total runtime: " << (poll_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "Callback percentage of total runtime: " << (callback_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "Eval percentage of total runtime: " << (eval_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "Average eval: " << (eval_time.count() / eval_num) << " ns" << std::endl;
             std::cout << "Clear percentage of total runtime: " << (clear_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "Blit percentage of total runtime: " << (blit_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "IO percentage of total runtime: " << (io_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "Graphics percentage of total runtime: " << (graphics_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "Average graphics: " << (graphics_time.count() / graphics_num) << " ns" << std::endl;
         }
         cleanup();
     }
@@ -395,6 +404,8 @@ private:
     std::chrono::nanoseconds io_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds graphics_time = std::chrono::nanoseconds::zero();
     int iter_num = 0;
+    int eval_num = 0;
+    int graphics_num = 0;
 
     bool checkValidationLayerSupport() {
         uint32_t layerCount;
@@ -1375,9 +1386,9 @@ private:
             case uxn_device::Screen:
                 return !did_graphics;
             case uxn_device::Mouse:
-                return mouse.used;
+                return safeMouseUsed();
             case uxn_device::Controller:
-                return keyboard.used;
+                return safeKeyboardUsed();
             default:
                return false;
         }
@@ -1393,15 +1404,16 @@ private:
         auto last_frame_time = std::chrono::steady_clock::now();
         auto current_vector = uxn_device::Null;
         int callback_index = 0;
+        auto prev_time = std::chrono::steady_clock::now();
 
         fastCopyPrivateHostMemToDevice(uxn->memory);
         fastCopyHostMemToDevice(uxn->memory);
 
         while (!glfwWindowShouldClose(ctx.window) && !uxn->programTerminated()) {
             iter_num++;
-            auto prev_time = std::chrono::steady_clock::now();
+            prev_time = std::chrono::steady_clock::now();
 
-            glfwPollEvents();
+            // glfwPollEvents();
 
             poll_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
             prev_time = std::chrono::steady_clock::now();
@@ -1411,16 +1423,17 @@ private:
                 auto callback = CALLBACK_DEVICES[callback_index];
                 if (uxn->deviceCallbackVectors.contains(callback) && doCallback(callback, did_graphics)) {
                     uxn->prepareCallback(callback);
-                    callback_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
                     fastCopyHostMemToDevice(uxn->memory);
                     in_vector = true;
                     current_vector = callback;
                 }
                 callback_index = (callback_index + 1) % static_cast<int>(CALLBACK_DEVICES.size());
+                callback_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
             }
-            prev_time = std::chrono::steady_clock::now();
 
             if (in_vector) {
+                eval_num++;
+                prev_time = std::chrono::steady_clock::now();
                 // compute steps
                 uxnEvalShader();
                 eval_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
@@ -1463,12 +1476,13 @@ private:
                     << ", " << uxn->memory->_private.ram[uxn->memory->shared.pc-3]
                     << std::dec);
             }
-            prev_time = std::chrono::steady_clock::now();
 
             // graphics step: only enter if it is time to draw a frame again (60 FPS)
             auto now_time = std::chrono::steady_clock::now();
             auto elapsed_since_frame = std::chrono::duration_cast<std::chrono::milliseconds>(now_time - last_frame_time);
             if ((elapsed_since_frame >= frame_duration) && halt_code == 1 && did_graphics) {
+                graphics_num++;
+                prev_time = std::chrono::steady_clock::now();
                 transitionImagesToReadLayout(nullptr);
                 graphicsStep();
                 transitionImagesToEditLayout(nullptr);
@@ -1478,8 +1492,8 @@ private:
                 callback_index = 0;
                 did_graphics = false;
                 cleared = false;
+                graphics_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
             }
-            graphics_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
             if (!in_vector) current_vector = uxn_device::Null;
 
             // check if crashed
@@ -1494,6 +1508,12 @@ private:
         if (uxn->programTerminated()) {
             std::cout << "Uxn Program Terminated with exit code: 0x" << std::hex
             << static_cast<int>(from_uxn_mem(&uxn->memory->shared.dev[0x0f])) << std::dec << "\n";
+        }
+    }
+
+    void eventLoop() {
+        while (!glfwWindowShouldClose(ctx.window) && !uxn->programTerminated()) {
+            glfwWaitEvents();
         }
     }
 

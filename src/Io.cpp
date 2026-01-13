@@ -13,6 +13,8 @@
 
 std::unordered_map<int, uint8_t> keymap;
 
+std::mutex io_lock;
+
 void keyboardInit() {
     // A
     keymap.insert({glfwGetKeyScancode(GLFW_KEY_LEFT_CONTROL), KEY_A});
@@ -45,6 +47,7 @@ void keyboardInit() {
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     // button = 0 when left click, button = 1 when right click
     // todo this function sucks
+    std::lock_guard<std::mutex> lock(io_lock);
     mouse.used = true;
     mouse.mouse1 = false; mouse.mouse2 = false; mouse.mouse3 = false;
     switch (button) {
@@ -57,11 +60,13 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
 
 void cursorPositionCallback(GLFWwindow* window, double x, double y) {
     // values are from 0 to WIDTH, HEIGHT;  0,0 top left
+    std::lock_guard<std::mutex> lock(io_lock);
     mouse.cursor_x = static_cast<uint16_t>(x);
     mouse.cursor_y = static_cast<uint16_t>(y);
 }
 
 void keyboardPressCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    std::lock_guard<std::mutex> lock(io_lock);
     if (action != GLFW_RELEASE) { return; }
     keyboard.used = true;
     if (auto pKey = glfwGetKeyName(key, scancode)) keyboard.key = *pKey;
@@ -70,6 +75,7 @@ void keyboardPressCallback(GLFWwindow* window, int key, int scancode, int action
 
 void mouseToUxnMemory(UxnMemory* memory) {
     // always copy mouse data
+    std::lock_guard<std::mutex> lock(io_lock);
     to_uxn_mem2(mouse.cursor_x, &memory->shared.dev[0x92]);
     to_uxn_mem2(mouse.cursor_y, &memory->shared.dev[0x94]);
     if (mouse.used) {
@@ -85,9 +91,20 @@ void mouseToUxnMemory(UxnMemory* memory) {
 }
 
 void keyboardToUxnMemory(UxnMemory* memory) {
+    std::lock_guard<std::mutex> lock(io_lock);
     if (keyboard.used) {
         to_uxn_mem(keyboard.button, &memory->shared.dev[0x82]);
         to_uxn_mem(keyboard.key, &memory->shared.dev[0x83]);
         keyboard.used = false;
     }
+}
+
+bool safeMouseUsed() {
+    std::lock_guard<std::mutex> lock(io_lock);
+    return mouse.used;
+}
+
+bool safeKeyboardUsed() {
+    std::lock_guard<std::mutex> lock(io_lock);
+    return keyboard.used;
 }
