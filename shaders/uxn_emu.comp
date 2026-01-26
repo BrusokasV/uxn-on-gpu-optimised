@@ -158,12 +158,13 @@ void REM(int _r, int _2) {
 
 /* Devices */
 // Flags
-#define DEO_FLAG         0x001
-#define DEO_CONSOLE_FLAG 0x002
-#define DEO_CERROR_FLAG  0x004
-#define DEI_CONSOLE_FLAG 0x010
-#define DRAW_PIXEL_FLAG  0x100
-#define DRAW_SPRITE_FLAG 0x200
+#define DEO_FLAG            0x001
+#define DEO_CONSOLE_FLAG    0x002
+#define DEO_CERROR_FLAG     0x004
+#define SYSTEM_COLOUR_FLAG  0x008
+#define DEI_CONSOLE_FLAG    0x010
+#define DRAW_PIXEL_FLAG     0x100
+#define DRAW_SPRITE_FLAG    0x200
 
 // input from device
 uvec2 DEI(uint addr, uvec2 o, int _r, int _2) {
@@ -190,6 +191,7 @@ uint DEO(uint addr, uvec2 v, int _2) {
     if (addr == 0x2f) shared_uxn.flags |= DRAW_SPRITE_FLAG;
     if (addr == 0x18) shared_uxn.flags |= DEO_CONSOLE_FLAG;
     if (addr == 0x19) shared_uxn.flags |= DEO_CERROR_FLAG;
+    if ((addr >= 0x08) && (addr <= 0x0d)) shared_uxn.flags |= SYSTEM_COLOUR_FLAG;
 
     // no need to halt in a lot of cases, i.e. when writting to Screen/X
     uint halt = 2 + _2; // halt code for DEO/DEO2

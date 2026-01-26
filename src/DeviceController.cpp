@@ -343,12 +343,11 @@ public:
         if (logMetrics) logger.logEnd();
         if (logMetrics) logger.printMetrics();
         if (logMetrics) {
-            vm_runtime_total = poll_time + callback_time + eval_time + clear_time + blit_time + io_time + graphics_time;
+            vm_runtime_total = poll_time + callback_time + eval_time + blit_time + io_time + graphics_time;
             std::cout << "Poll percentage of total runtime: " << (poll_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "Callback percentage of total runtime: " << (callback_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "Eval percentage of total runtime: " << (eval_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "Average eval: " << (eval_time.count() / eval_num) << " ns" << std::endl;
-            std::cout << "Clear percentage of total runtime: " << (clear_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "Blit percentage of total runtime: " << (blit_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "IO percentage of total runtime: " << (io_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "Graphics percentage of total runtime: " << (graphics_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
@@ -399,10 +398,10 @@ private:
     std::chrono::nanoseconds poll_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds callback_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds eval_time = std::chrono::nanoseconds::zero();
-    std::chrono::nanoseconds clear_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds blit_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds io_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds graphics_time = std::chrono::nanoseconds::zero();
+
     int iter_num = 0;
     int eval_num = 0;
     int graphics_num = 0;
@@ -1201,38 +1200,6 @@ private:
         }
     }
 
-    void clearImage(VkCommandBuffer cmdBuffer) {
-        bool singleTimeBuffer = cmdBuffer == VK_NULL_HANDLE;
-        if (singleTimeBuffer)
-            cmdBuffer = beginSingleTimeCommands(ctx);
-
-        VkImageSubresourceRange subresourceRange{};
-        subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        subresourceRange.baseMipLevel = 0;
-        subresourceRange.levelCount = 1;
-        subresourceRange.baseArrayLayer = 0;
-        subresourceRange.layerCount = 1;
-
-        VkClearColorValue foregroundColor = {};
-        foregroundColor.float32[0] = 0.0f;
-        foregroundColor.float32[1] = 0.0f;
-        foregroundColor.float32[2] = 0.0f;
-        foregroundColor.float32[3] = 0.0f;
-
-        auto back = uxn->getBackgroundColor();
-        VkClearColorValue backgroundColor = {};
-        backgroundColor.float32[0] = back.x;
-        backgroundColor.float32[1] = back.y;
-        backgroundColor.float32[2] = back.z;
-        backgroundColor.float32[3] = back.w;
-
-        vkCmdClearColorImage(cmdBuffer, backgroundImageResource.data.image._, VK_IMAGE_LAYOUT_GENERAL, &backgroundColor, 1, &subresourceRange);
-        vkCmdClearColorImage(cmdBuffer, foregroundImageResource.data.image._, VK_IMAGE_LAYOUT_GENERAL, &foregroundColor, 1, &subresourceRange);
-
-        if (singleTimeBuffer)
-             endSingleTimeCommands(ctx, cmdBuffer);
-    }
-
     /// Transition the images formats to edit mode for the blit shader
     void transitionImagesToEditLayout(VkCommandBuffer cmdBuffer) {
         std::array images = {backgroundImageResource.data.image._, foregroundImageResource.data.image._};
@@ -1312,6 +1279,19 @@ private:
         vkCmdBindPipeline(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blitPipeline);
         vkCmdBindDescriptorSets(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blitPipelineLayout,
             0,descriptors.size(), descriptors.data(), 0, nullptr);
+
+        struct PushConstantData {
+            VkDeviceAddress sharedUxnAddress;
+            VkDeviceAddress privateUxnAddress;
+        } pushData;
+
+        pushData.sharedUxnAddress = fastSharedAddress;
+        pushData.privateUxnAddress = fastPrivateAddress;
+
+        vkCmdPushConstants(computeCommandBuffer, uxnEvaluatePipelineLayout, 
+            VK_SHADER_STAGE_COMPUTE_BIT, 
+            0, sizeof(PushConstantData), 
+            &pushData);
 
         vkCmdDispatch(computeCommandBuffer, 1, 1, 1);
 
@@ -1400,7 +1380,6 @@ private:
 
         glm::uint halt_code = 0;
         bool in_vector = true, did_graphics = true;
-        bool cleared = false;
         auto last_frame_time = std::chrono::steady_clock::now();
         auto current_vector = uxn_device::Null;
         int callback_index = 0;
@@ -1437,19 +1416,6 @@ private:
                 // compute steps
                 uxnEvalShader();
                 eval_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
-                prev_time = std::chrono::steady_clock::now();
-                // when it halts from an uxn eval, we need to figure out whenever or not
-                // to clear the screen before the blit shader
-                // the issue is: we need to clear the screen before we draw to it,
-                // and we should only draw onto the screen if it has been drawn
-                if (!cleared) {
-                    fastCopyDeviceMemToHost(uxn->memory);
-                    if (uxn->maskFlag(DRAW_PIXEL_FLAG) || uxn->maskFlag(DRAW_SPRITE_FLAG)) {
-                        cleared = true;
-                        clearImage(nullptr);
-                    }
-                }
-                clear_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
                 prev_time = std::chrono::steady_clock::now();
                 blitShader();
                 blit_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
@@ -1491,7 +1457,6 @@ private:
                 last_frame_time = std::chrono::steady_clock::now();
                 callback_index = 0;
                 did_graphics = false;
-                cleared = false;
                 graphics_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
             }
             if (!in_vector) current_vector = uxn_device::Null;

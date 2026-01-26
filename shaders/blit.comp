@@ -46,8 +46,9 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 #define SCREEN_PIXEL    0x2e
 #define SCREEN_SPRITE   0x2f
 // Flags
-#define DRAW_PIXEL_FLAG  0x100
-#define DRAW_SPRITE_FLAG 0x200
+#define DRAW_PIXEL_FLAG     0x100
+#define DRAW_SPRITE_FLAG    0x200
+#define SYSTEM_COLOUR_FLAG  0x008
 // Pixel Modes
 #define PIXEL_BACKGROUND_MASK 0x00
 #define PIXEL_FOREGROUND_MASK 0x40
@@ -119,36 +120,66 @@ vec4 colour_1bpp(uint sprite_low, uvec2 offset, ivec2 auto_xy, int auto_i) {
     uint draw_colour = (row >> offset.x) & 0x1; // for 1 bpp
 
     // select colour
-    if (draw_colour != 0 && sprite_low == 0x0) {
-        return vec4(0, 0, 0, 0); // 'none'
-    } else if (draw_colour == 0 && (sprite_low == 0x0 || sprite_low == 0x5 || sprite_low == 0xa || sprite_low == 0xf)) {
-        return vec4(0, 0, 0, 0); // 'clear' or 'none'
-    }
+    //if (draw_colour != 0 && sprite_low == 0x0) {
+    //    return vec4(0, 0, 0, 0); // 'none'
+    //} else if (draw_colour == 0 && (sprite_low == 0x0 || sprite_low == 0x5 || sprite_low == 0xa || sprite_low == 0xf)) {
+    //    return vec4(0, 0, 0, 0); // 'clear' or 'none'
+    //}
     // Extract bits [3:2] for 1 or bits [1:0] for 0
     uint colour = (sprite_low >> (2 * (1 - draw_colour))) & 0x3;
     return get_colour(colour);
 }
 
+void fill_image(bool layer_is_foreground, vec4 colour) {
+    // get dimensions
+    uint w = get_short(SCREEN_WIDTH);
+    uint h = get_short(SCREEN_HEIGHT);
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            if (layer_is_foreground) {
+                imageStore(foreground, ivec2(x, y), colour);
+            }
+            else { 
+                imageStore(background, ivec2(x, y), colour);
+            }
+        }
+    }
+}
+
 void main() {
     uvec2 offset = uvec2(gl_GlobalInvocationID);
+    // system colour set
+    if (mask(shared_uxn.flags, SYSTEM_COLOUR_FLAG)) {
+        fill_image(false, get_colour(0));
+    }
     // pixel requested
     if (mask(shared_uxn.flags, DRAW_PIXEL_FLAG) && (offset == uvec2(0, 0))) {
-        // ---------------------- pixel --------------------------------
-        // coordinates
-        uint x = get_short(SCREEN_X);
-        uint y = get_short(SCREEN_Y);
-        ivec2 coords = ivec2(x, y);
-
         // colour
         uint pixel = get_byte(SCREEN_PIXEL);
         vec4 colour = get_colour(pixel & 0x0f);
-
-        // editing the image
-        if (pixel / 0x10 == 0x0) {
-            imageStore(background, coords, colour);
+        
+        // fill mode and layer
+        bool fill_mode = mask(pixel, 0x80);
+        bool layer_is_foreground = mask(pixel, 0x40);
+        if (fill_mode) {
+            // ---------------------- fill ---------------------------------
+            fill_image(layer_is_foreground, colour);
         }
-        if (pixel / 0x10 == 0x4) {
-            imageStore(foreground, coords, colour);
+        else {
+            // ---------------------- pixel --------------------------------
+            // coordinates
+            uint x = get_short(SCREEN_X);
+            uint y = get_short(SCREEN_Y);
+            ivec2 coords = ivec2(x, y);
+
+            // editing the image
+            if (layer_is_foreground) {
+                imageStore(foreground, coords, colour);
+            }
+            else {
+                imageStore(background, coords, colour);
+            }
         }
     }
     // sprite requested
@@ -158,8 +189,8 @@ void main() {
         vec4 v_colour;
 
         // flipped, modes and layer
-        bool mode_is_2bpp = ((sprite >> 11) & 1) != 0;
-        bool layer_is_foreground = ((sprite >> 10) & 1) != 0;
+        bool mode_is_2bpp = mask(sprite, 0x80);
+        bool layer_is_foreground = mask(sprite, 0x40);
 
         // coordinates
         uint x = get_short(SCREEN_X);
@@ -185,16 +216,19 @@ void main() {
             ivec2 o = (i * 8) * auto_xy.yx;
 
             // choosing the bpp mode
-            vec4 v_colour = mode_is_2bpp ? colour_2bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0)
-                                         : colour_1bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0);
+            vec4 v_colour_1 = colour_1bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0);
 
-            if(v_colour == vec4(0, 0, 0, 0)) { continue; }
+            vec4 v_colour_2 = colour_2bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0);
+
+            // if(v_colour == vec4(0, 0, 0, 0)) { continue; }
             // ToDo - this is incorrect, as this prevents uxn from erasing old sprites. e.g. dvd and snake use that for clearing.
 
             if (layer_is_foreground) {
-                imageStore(foreground, coords + o, v_colour);
+                imageStore(foreground, coords + o, v_colour_1);
+                //if (mode_is_2bpp) { imageStore(foreground, coords + o, v_colour_2); }
             } else {
-                imageStore(background, coords + o, v_colour);
+                imageStore(background, coords + o, v_colour_1);
+                //if (mode_is_2bpp) { imageStore(foreground, coords + o, v_colour_2); }
             }
         }
 
