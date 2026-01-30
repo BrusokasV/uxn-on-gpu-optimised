@@ -17,7 +17,6 @@
 #include "shaders/vert.h"
 #include "shaders/frag.h"
 #include "shaders/uxn_emu.h"
-#include "shaders/blit.h"
 
 // Window Dimensions
 int WIDTH = 512;
@@ -343,15 +342,15 @@ public:
         if (logMetrics) logger.logEnd();
         if (logMetrics) logger.printMetrics();
         if (logMetrics) {
-            vm_runtime_total = poll_time + callback_time + eval_time + blit_time + io_time + graphics_time;
-            std::cout << "Poll percentage of total runtime: " << (poll_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            vm_runtime_total = callback_time + uxn_emu_time + io_time + graphics_time;
             std::cout << "Callback percentage of total runtime: " << (callback_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-            std::cout << "Eval percentage of total runtime: " << (eval_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-            std::cout << "Average eval: " << (eval_time.count() / eval_num) << " ns" << std::endl;
-            std::cout << "Blit percentage of total runtime: " << (blit_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average callback: " << (callback_time.count() / (iter_num - eval_num)) << " ns" << std::endl;
+            std::cout << "Eval percentage of total runtime: " << (uxn_emu_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average eval: " << (uxn_emu_time.count() / eval_num) << " ns" << std::endl;
             std::cout << "IO percentage of total runtime: " << (io_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average IO: " << (io_time.count() / eval_num) << " ns" << std::endl;
             std::cout << "Graphics percentage of total runtime: " << (graphics_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-            std::cout << "Average graphics: " << (graphics_time.count() / graphics_num) << " ns" << std::endl;
+            std::cout << "  Average graphics: " << (graphics_time.count() / graphics_num) << " ns" << std::endl;
         }
         cleanup();
     }
@@ -367,14 +366,11 @@ private:
     VkPipeline graphicsPipeline;
     VkCommandBuffer graphicsCommandBuffer;
 
-    VkPipelineLayout uxnEvaluatePipelineLayout;
-    VkPipeline uxnEvaluatePipeline;
-    VkPipelineLayout blitPipelineLayout;
-    VkPipeline blitPipeline;
+    VkPipelineLayout uxnEmuPipelineLayout;
+    VkPipeline uxnEmuPipeline;
     VkCommandBuffer computeCommandBuffer;
 
-    DescriptorSetWrapper uxnDescriptorSet;
-    DescriptorSetWrapper blitDescriptorSet;
+    DescriptorSetWrapper uxnEmuDescriptorSet;
     DescriptorSetWrapper graphicsDescriptorSet;
     Resource backgroundImageResource;
     Resource foregroundImageResource;
@@ -391,14 +387,11 @@ private:
     VkSemaphore renderFinishedSemaphore;
     VkFence graphicsFence;
     VkFence computeInFlightFence;
-    VkFence uxnEvaluationFence;
-    VkFence blitFence;
+    VkFence uxnEmuFence;
 
     std::chrono::nanoseconds vm_runtime_total = std::chrono::nanoseconds::zero();
-    std::chrono::nanoseconds poll_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds callback_time = std::chrono::nanoseconds::zero();
-    std::chrono::nanoseconds eval_time = std::chrono::nanoseconds::zero();
-    std::chrono::nanoseconds blit_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds uxn_emu_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds io_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds graphics_time = std::chrono::nanoseconds::zero();
 
@@ -1000,8 +993,7 @@ private:
     void initResources() {
         LOG("..initResources");
 
-        uxnDescriptorSet = DescriptorSetWrapper();
-        blitDescriptorSet = DescriptorSetWrapper();
+        uxnEmuDescriptorSet = DescriptorSetWrapper();
         graphicsDescriptorSet = DescriptorSetWrapper();
 
         // buffers accessible through device addresses
@@ -1024,15 +1016,14 @@ private:
         fastPrivateAddress = vkGetBufferDeviceAddress(ctx.device, &fastPrivateInfo);
 
         backgroundImageResource = Resource(ctx, BACKGROUND_IMAGE_BINDING, BACKGROUND_SAMPLER_BINDING,
-            &blitDescriptorSet, &graphicsDescriptorSet, {uxn_width, uxn_height, 0});
+            &uxnEmuDescriptorSet, &graphicsDescriptorSet, {uxn_width, uxn_height, 0});
         foregroundImageResource = Resource(ctx, FOREGROUND_IMAGE_BINDING, FOREGROUND_SAMPLER_BINDING,
-            &blitDescriptorSet, &graphicsDescriptorSet, {uxn_width, uxn_height, 0});
+            &uxnEmuDescriptorSet, &graphicsDescriptorSet, {uxn_width, uxn_height, 0});
         vertexResource = Resource(ctx, VERTEX_LOCATION, &graphicsDescriptorSet,
             VERTICES_SIZE, vertices.data(),
             false, true, false);
 
-        uxnDescriptorSet.initialise(ctx);
-        blitDescriptorSet.initialise(ctx);
+        uxnEmuDescriptorSet.initialise(ctx);
         graphicsDescriptorSet.initialise(ctx);
     }
 
@@ -1045,8 +1036,7 @@ private:
         fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-        if (vkCreateFence(ctx.device, &fenceInfo, nullptr, &uxnEvaluationFence) != VK_SUCCESS ||
-            vkCreateFence(ctx.device, &fenceInfo, nullptr, &blitFence) != VK_SUCCESS) {
+        if (vkCreateFence(ctx.device, &fenceInfo, nullptr, &uxnEmuFence) != VK_SUCCESS) {
             throw std::runtime_error("failed to create synchronization objects!");
         }
 
@@ -1091,11 +1081,8 @@ private:
         initDescriptorPool();
         updateUxnConstants();
         initResources();
-        std::array blitLayouts = {uxnDescriptorSet.layout, blitDescriptorSet.layout};
         initComputePipeline(shaders_uxn_emu_spv, shaders_uxn_emu_spv_len,
-            uxnEvaluatePipeline, uxnEvaluatePipelineLayout, &uxnDescriptorSet.layout, 1);
-        initComputePipeline(shaders_blit_spv, shaders_blit_spv_len,
-            blitPipeline, blitPipelineLayout, blitLayouts.data(), blitLayouts.size());
+            uxnEmuPipeline, uxnEmuPipelineLayout, &uxnEmuDescriptorSet.layout, 1);
         initFrameBuffers();
         initGraphicsPipeline();
         initSync();
@@ -1200,7 +1187,7 @@ private:
         }
     }
 
-    /// Transition the images formats to edit mode for the blit shader
+    /// Transition the images formats to edit mode for the eval shader
     void transitionImagesToEditLayout(VkCommandBuffer cmdBuffer) {
         std::array images = {backgroundImageResource.data.image._, foregroundImageResource.data.image._};
         transitionImageLayout(ctx, 2, images.data(),
@@ -1216,12 +1203,11 @@ private:
                               VK_IMAGE_LAYOUT_GENERAL,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                               cmdBuffer);
-    }
+    }   
 
-    void uxnEvalShader() {
-        // --- UXN evaluation submission ---
-        vkQueueWaitIdle(ctx.computeQueue);
-        vkResetFences(ctx.device, 1, &uxnEvaluationFence);
+    void uxnEmuShader() {
+        // --- Uxn Emu submission ---
+        vkResetFences(ctx.device, 1, &uxnEmuFence);
         vkResetCommandBuffer(computeCommandBuffer, 0);
 
         VkCommandBufferBeginInfo beginInfo{};
@@ -1230,9 +1216,9 @@ private:
             throw std::runtime_error("failed to begin recording command buffer!");
         }
 
-        vkCmdBindPipeline(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEvaluatePipeline);
-        vkCmdBindDescriptorSets(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEvaluatePipelineLayout,
-            0,1, &uxnDescriptorSet.set, 0, nullptr);
+        vkCmdBindPipeline(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEmuPipeline);
+        vkCmdBindDescriptorSets(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEmuPipelineLayout,
+            0,1, &uxnEmuDescriptorSet.set, 0, nullptr);
 
         struct PushConstantData {
             VkDeviceAddress sharedUxnAddress;
@@ -1242,7 +1228,7 @@ private:
         pushData.sharedUxnAddress = fastSharedAddress;
         pushData.privateUxnAddress = fastPrivateAddress;
 
-        vkCmdPushConstants(computeCommandBuffer, uxnEvaluatePipelineLayout, 
+        vkCmdPushConstants(computeCommandBuffer, uxnEmuPipelineLayout, 
             VK_SHADER_STAGE_COMPUTE_BIT, 
             0, sizeof(PushConstantData), 
             &pushData);
@@ -1257,58 +1243,12 @@ private:
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &computeCommandBuffer;
-        if (vkQueueSubmit(ctx.computeQueue, 1, &submitInfo, uxnEvaluationFence) != VK_SUCCESS) {
-            throw std::runtime_error("failed to submit compute command buffer!");
-        }
-        // wait for uxn step to be done
-        vkWaitForFences(ctx.device, 1, &uxnEvaluationFence, VK_TRUE, UINT64_MAX);
-    }
-
-    void blitShader() {
-        // --- Blit submission ---
-        vkResetFences(ctx.device, 1, &blitFence);
-        vkResetCommandBuffer(computeCommandBuffer, 0);
-
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        if (vkBeginCommandBuffer(computeCommandBuffer, &beginInfo) != VK_SUCCESS) {
-            throw std::runtime_error("failed to begin recording command buffer!");
-        }
-
-        std::array descriptors = {uxnDescriptorSet.set, blitDescriptorSet.set};
-        vkCmdBindPipeline(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blitPipeline);
-        vkCmdBindDescriptorSets(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blitPipelineLayout,
-            0,descriptors.size(), descriptors.data(), 0, nullptr);
-
-        struct PushConstantData {
-            VkDeviceAddress sharedUxnAddress;
-            VkDeviceAddress privateUxnAddress;
-        } pushData;
-
-        pushData.sharedUxnAddress = fastSharedAddress;
-        pushData.privateUxnAddress = fastPrivateAddress;
-
-        vkCmdPushConstants(computeCommandBuffer, uxnEvaluatePipelineLayout, 
-            VK_SHADER_STAGE_COMPUTE_BIT, 
-            0, sizeof(PushConstantData), 
-            &pushData);
-
-        vkCmdDispatch(computeCommandBuffer, 1, 1, 1);
-
-        if (vkEndCommandBuffer(computeCommandBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("failed to record command buffer!");
-        }
-
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &computeCommandBuffer;
-        if (vkQueueSubmit(ctx.computeQueue, 1, &submitInfo, blitFence) != VK_SUCCESS) {
+        if (vkQueueSubmit(ctx.computeQueue, 1, &submitInfo, uxnEmuFence) != VK_SUCCESS) {
             throw std::runtime_error("failed to submit compute command buffer!");
         }
 
-        // wait for blit step to be done
-        vkWaitForFences(ctx.device, 1, &blitFence, VK_TRUE, UINT64_MAX);
+        // wait for eval step to be done
+        vkWaitForFences(ctx.device, 1, &uxnEmuFence, VK_TRUE, UINT64_MAX);
     }
 
     void graphicsStep() {
@@ -1390,15 +1330,10 @@ private:
 
         while (!glfwWindowShouldClose(ctx.window) && !uxn->programTerminated()) {
             iter_num++;
-            prev_time = std::chrono::steady_clock::now();
-
-            // glfwPollEvents();
-
-            poll_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
-            prev_time = std::chrono::steady_clock::now();
 
             if (!in_vector) {
                 // pick a new vector to execute
+                prev_time = std::chrono::steady_clock::now();
                 auto callback = CALLBACK_DEVICES[callback_index];
                 if (uxn->deviceCallbackVectors.contains(callback) && doCallback(callback, did_graphics)) {
                     uxn->prepareCallback(callback);
@@ -1411,14 +1346,11 @@ private:
             }
 
             if (in_vector) {
+                // compute steps
                 eval_num++;
                 prev_time = std::chrono::steady_clock::now();
-                // compute steps
-                uxnEvalShader();
-                eval_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
-                prev_time = std::chrono::steady_clock::now();
-                blitShader();
-                blit_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
+                uxnEmuShader();
+                uxn_emu_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
                 prev_time = std::chrono::steady_clock::now();
                 fastCopyDeviceMemToHost(uxn->memory);
                 uxn->handleUxnIO();
@@ -1486,8 +1418,7 @@ private:
         vkDeviceWaitIdle(ctx.device);
         delete uxn;
         console->stop();
-        uxnDescriptorSet.destroy(ctx);
-        blitDescriptorSet.destroy(ctx);
+        uxnEmuDescriptorSet.destroy(ctx);
         graphicsDescriptorSet.destroy(ctx);
         vkDestroyBuffer(ctx.device, fastSharedBuffer, nullptr);
         vkFreeMemory(ctx.device, fastSharedMemory, nullptr);
@@ -1497,8 +1428,7 @@ private:
         vkDestroySemaphore(ctx.device, imageAvailableSemaphore, nullptr);
         vkDestroyFence(ctx.device, graphicsFence, nullptr);
         vkDestroyFence(ctx.device, computeInFlightFence, nullptr);
-        vkDestroyFence(ctx.device, uxnEvaluationFence, nullptr);
-        vkDestroyFence(ctx.device, blitFence, nullptr);
+        vkDestroyFence(ctx.device, uxnEmuFence, nullptr);
         backgroundImageResource.destroy();
         foregroundImageResource.destroy();
         vertexResource.destroy();
@@ -1507,11 +1437,9 @@ private:
             vkDestroyFramebuffer(ctx.device, framebuffer, nullptr);
         }
         vkDestroyPipeline(ctx.device, graphicsPipeline, nullptr);
-        vkDestroyPipeline(ctx.device, uxnEvaluatePipeline, nullptr);
-        vkDestroyPipeline(ctx.device, blitPipeline, nullptr);
+        vkDestroyPipeline(ctx.device, uxnEmuPipeline, nullptr);
         vkDestroyPipelineLayout(ctx.device, graphicsPipelineLayout, nullptr);
-        vkDestroyPipelineLayout(ctx.device, uxnEvaluatePipelineLayout, nullptr);
-        vkDestroyPipelineLayout(ctx.device, blitPipelineLayout, nullptr);
+        vkDestroyPipelineLayout(ctx.device, uxnEmuPipelineLayout, nullptr);
         vkDestroyRenderPass(ctx.device, renderPass, nullptr);
         for (auto imageView : ctx.swapChainImageViews) {
             vkDestroyImageView(ctx.device, imageView, nullptr);

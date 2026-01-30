@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SHADER_DIR="shaders"
-UXN_SHADERS="uxn_emu blit"
+UXN_SHADERS="uxn_emu"
 GRAPHICS_SHADERS="shader.vert shader.frag"
 
 #cd ..
@@ -36,6 +36,5 @@ cd ..
 xxd -i shaders/shader.vert.spv > src/shaders/vert.h
 xxd -i shaders/shader.frag.spv > src/shaders/frag.h
 xxd -i shaders/uxn_emu.spv > src/shaders/uxn_emu.h
-xxd -i shaders/blit.spv > src/shaders/blit.h
 
 echo "Shaders compiled successfully!"

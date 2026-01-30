@@ -7,14 +7,12 @@ set(CMAKE_CXX_STANDARD 20)
 # === Shader headers and SPIR-V outputs ===
 set(SHADER_HEADERS
         ${CMAKE_SOURCE_DIR}/src/shaders/uxn_emu.h
-        ${CMAKE_SOURCE_DIR}/src/shaders/blit.h
         ${CMAKE_SOURCE_DIR}/src/shaders/vert.h
         ${CMAKE_SOURCE_DIR}/src/shaders/frag.h
 )
 
 set(SHADER_SPV
         ${CMAKE_SOURCE_DIR}/shaders/uxn_emu.spv
-        ${CMAKE_SOURCE_DIR}/shaders/blit.spv
         ${CMAKE_SOURCE_DIR}/shaders/shader.vert.spv
         ${CMAKE_SOURCE_DIR}/shaders/shader.frag.spv
 )
@@ -26,7 +24,6 @@ add_custom_command(
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         DEPENDS
         ${CMAKE_SOURCE_DIR}/shaders/uxn_emu.comp
-        ${CMAKE_SOURCE_DIR}/shaders/blit.comp
         ${CMAKE_SOURCE_DIR}/shaders/shader.vert.glsl
         ${CMAKE_SOURCE_DIR}/shaders/shader.frag.glsl
         BYPRODUCTS ${SHADER_HEADERS} ${SHADER_SPV}
@@ -39,7 +36,6 @@ add_custom_target(compile_shaders
 
 # === Main executable ===
 add_executable(uxn-on-gpu
-        ${CMAKE_SOURCE_DIR}/src/shaders/blit.h
         ${CMAKE_SOURCE_DIR}/src/shaders/frag.h
         ${CMAKE_SOURCE_DIR}/src/shaders/uxn_emu.h
         ${CMAKE_SOURCE_DIR}/src/shaders/vert.h
