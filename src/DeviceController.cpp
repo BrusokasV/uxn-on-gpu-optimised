@@ -134,6 +134,21 @@ SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device, VkSurface
     return details;
 }
 
+VkResult checkTimestampQueriesSupport(VkPhysicalDevice device) {
+    VkPhysicalDeviceProperties pProperties;
+
+    vkGetPhysicalDeviceProperties(device, &pProperties);
+
+    VkPhysicalDeviceLimits device_limits = pProperties.limits;
+
+    if (device_limits.timestampPeriod == 0 || !device_limits.timestampComputeAndGraphics)
+    {
+        return VK_ERROR_UNKNOWN;
+    }
+
+    return VK_SUCCESS;
+}
+
 VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
     for (const auto& availableFormat : availableFormats) {
         if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB &&
@@ -347,6 +362,7 @@ public:
             std::cout << "  Average callback: " << (callback_time.count() / (iter_num - eval_num)) << " ns" << std::endl;
             std::cout << "Eval percentage of total runtime: " << (uxn_emu_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "  Average eval: " << (uxn_emu_time.count() / eval_num) << " ns" << std::endl;
+            std::cout << "  Eval \% on GPU: " << (uxn_emu_in_shader_time.count() * 100.0 / uxn_emu_time.count()) << "%" << std::endl;
             std::cout << "IO percentage of total runtime: " << (io_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "  Average IO: " << (io_time.count() / eval_num) << " ns" << std::endl;
             std::cout << "Graphics percentage of total runtime: " << (graphics_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
@@ -392,12 +408,16 @@ private:
     std::chrono::nanoseconds vm_runtime_total = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds callback_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds uxn_emu_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds uxn_emu_in_shader_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds io_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds graphics_time = std::chrono::nanoseconds::zero();
 
     int iter_num = 0;
     int eval_num = 0;
     int graphics_num = 0;
+
+    VkQueryPool queryPool;
+    uint64_t time_stamps[2]; 
 
     bool checkValidationLayerSupport() {
         uint32_t layerCount;
@@ -1049,6 +1069,23 @@ private:
         }
     }
 
+    void initQueryPools() {
+        LOG("..initQueryPools");
+        
+        if (checkTimestampQueriesSupport(ctx.physicalDevice) != VK_SUCCESS) {
+            throw std::runtime_error{"The selected device does not support timestamp queries!"};
+        }
+
+        VkQueryPoolCreateInfo pCreateInfo{};
+        pCreateInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        pCreateInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        pCreateInfo.queryCount = 2;
+
+        if (vkCreateQueryPool(ctx.device, &pCreateInfo, nullptr, &queryPool) != VK_SUCCESS) {
+            throw std::runtime_error("failed to init query pools!");
+        }
+    }
+
     void updateUxnConstants() {
         LOG("..updateUxnConstants");
 
@@ -1086,6 +1123,7 @@ private:
         initFrameBuffers();
         initGraphicsPipeline();
         initSync();
+        initQueryPools();
     }
 
     void fastCopyDeviceMemToHost(UxnMemory* target) {
@@ -1215,6 +1253,7 @@ private:
         if (vkBeginCommandBuffer(computeCommandBuffer, &beginInfo) != VK_SUCCESS) {
             throw std::runtime_error("failed to begin recording command buffer!");
         }
+        vkCmdResetQueryPool(computeCommandBuffer, queryPool, 0, 2);
 
         vkCmdBindPipeline(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEmuPipeline);
         vkCmdBindDescriptorSets(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEmuPipelineLayout,
@@ -1233,7 +1272,11 @@ private:
             0, sizeof(PushConstantData), 
             &pushData);
 
+        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool, 0);
+
         vkCmdDispatch(computeCommandBuffer, 1, 1, 1);
+
+        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool, 1);
 
         if (vkEndCommandBuffer(computeCommandBuffer) != VK_SUCCESS) {
             throw std::runtime_error("failed to record command buffer!");
@@ -1249,6 +1292,20 @@ private:
 
         // wait for eval step to be done
         vkWaitForFences(ctx.device, 1, &uxnEmuFence, VK_TRUE, UINT64_MAX);
+
+        // Retrieve timestamp results
+        vkGetQueryPoolResults(ctx.device, queryPool, 0, 2, sizeof(time_stamps), 
+                            time_stamps, sizeof(uint64_t), 
+                            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+        // Get timestamp period to convert to nanoseconds
+        VkPhysicalDeviceProperties deviceProps;
+        vkGetPhysicalDeviceProperties(ctx.physicalDevice, &deviceProps);
+        float timestampPeriod = deviceProps.limits.timestampPeriod;
+
+        // Calculate elapsed time in nanoseconds
+        uint64_t elapsedTicks = time_stamps[1] - time_stamps[0];
+        uxn_emu_in_shader_time += std::chrono::nanoseconds(static_cast<uint64_t>(elapsedTicks * timestampPeriod));
     }
 
     void graphicsStep() {
@@ -1420,6 +1477,7 @@ private:
         console->stop();
         uxnEmuDescriptorSet.destroy(ctx);
         graphicsDescriptorSet.destroy(ctx);
+        vkDestroyQueryPool(ctx.device, queryPool, nullptr);
         vkDestroyBuffer(ctx.device, fastSharedBuffer, nullptr);
         vkFreeMemory(ctx.device, fastSharedMemory, nullptr);
         vkDestroyBuffer(ctx.device, fastPrivateBuffer, nullptr);
