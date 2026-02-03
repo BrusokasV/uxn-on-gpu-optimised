@@ -1292,20 +1292,6 @@ private:
 
         // wait for eval step to be done
         vkWaitForFences(ctx.device, 1, &uxnEmuFence, VK_TRUE, UINT64_MAX);
-
-        // Retrieve timestamp results
-        vkGetQueryPoolResults(ctx.device, queryPool, 0, 2, sizeof(time_stamps), 
-                            time_stamps, sizeof(uint64_t), 
-                            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-
-        // Get timestamp period to convert to nanoseconds
-        VkPhysicalDeviceProperties deviceProps;
-        vkGetPhysicalDeviceProperties(ctx.physicalDevice, &deviceProps);
-        float timestampPeriod = deviceProps.limits.timestampPeriod;
-
-        // Calculate elapsed time in nanoseconds
-        uint64_t elapsedTicks = time_stamps[1] - time_stamps[0];
-        uxn_emu_in_shader_time += std::chrono::nanoseconds(static_cast<uint64_t>(elapsedTicks * timestampPeriod));
     }
 
     void graphicsStep() {
@@ -1382,6 +1368,11 @@ private:
         int callback_index = 0;
         auto prev_time = std::chrono::steady_clock::now();
 
+        // timestamp period to convert to nanoseconds
+        VkPhysicalDeviceProperties deviceProps;
+        vkGetPhysicalDeviceProperties(ctx.physicalDevice, &deviceProps);
+        float timestampPeriod = deviceProps.limits.timestampPeriod;
+
         fastCopyPrivateHostMemToDevice(uxn->memory);
         fastCopyHostMemToDevice(uxn->memory);
 
@@ -1408,6 +1399,15 @@ private:
                 prev_time = std::chrono::steady_clock::now();
                 uxnEmuShader();
                 uxn_emu_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
+                
+                // update timestamp results
+                vkGetQueryPoolResults(ctx.device, queryPool, 0, 2, sizeof(time_stamps), 
+                                    time_stamps, sizeof(uint64_t), 
+                                    VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+                uint64_t elapsedTicks = time_stamps[1] - time_stamps[0];
+                uxn_emu_in_shader_time += std::chrono::nanoseconds(static_cast<uint64_t>(elapsedTicks * timestampPeriod));
+
                 prev_time = std::chrono::steady_clock::now();
                 fastCopyDeviceMemToHost(uxn->memory);
                 uxn->handleUxnIO();
