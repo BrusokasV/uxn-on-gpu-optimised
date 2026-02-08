@@ -1028,7 +1028,7 @@ private:
 
         createBuffer(ctx, sizeof(UxnMemory::_private), 
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR, 
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, 
             fastPrivateBuffer, fastPrivateMemory);
 
         VkBufferDeviceAddressInfoKHR fastPrivateInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
@@ -1272,11 +1272,11 @@ private:
             0, sizeof(PushConstantData), 
             &pushData);
 
-        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool, 0);
+        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool, 0);
 
         vkCmdDispatch(computeCommandBuffer, 1, 1, 1);
 
-        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, queryPool, 1);
+        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 1);
 
         if (vkEndCommandBuffer(computeCommandBuffer) != VK_SUCCESS) {
             throw std::runtime_error("failed to record command buffer!");
