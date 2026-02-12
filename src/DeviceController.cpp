@@ -395,9 +395,11 @@ private:
     VkBuffer fastSharedBuffer;
     VkDeviceMemory fastSharedMemory;
     VkDeviceAddress fastSharedAddress;
+    void* sharedData;
     VkBuffer fastPrivateBuffer;
     VkDeviceMemory fastPrivateMemory;
     VkDeviceAddress fastPrivateAddress;
+    void* privateData;
 
     VkSemaphore imageAvailableSemaphore;
     VkSemaphore renderFinishedSemaphore;
@@ -1024,7 +1026,12 @@ private:
 
         VkBufferDeviceAddressInfoKHR fastSharedInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
         fastSharedInfo.buffer = fastSharedBuffer;
-        fastSharedAddress = vkGetBufferDeviceAddress(ctx.device, &fastSharedInfo);
+        fastSharedAddress = vkGetBufferDeviceAddress(ctx.device, &fastSharedInfo);      
+        
+        if (vkMapMemory(ctx.device, fastSharedMemory, 0, sizeof(UxnMemory::shared), 0, &sharedData) != VK_SUCCESS) {
+            std::cerr << "Failed to map shared memory!" << std::endl;
+            return;
+        }
 
         createBuffer(ctx, sizeof(UxnMemory::_private), 
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR, 
@@ -1034,6 +1041,11 @@ private:
         VkBufferDeviceAddressInfoKHR fastPrivateInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
         fastPrivateInfo.buffer = fastPrivateBuffer;
         fastPrivateAddress = vkGetBufferDeviceAddress(ctx.device, &fastPrivateInfo);
+
+        if (vkMapMemory(ctx.device, fastPrivateMemory, 0, sizeof(UxnMemory::_private), 0, &privateData) != VK_SUCCESS) {
+            std::cerr << "Failed to map private memory!" << std::endl;
+            return;
+        }
 
         backgroundImageResource = Resource(ctx, BACKGROUND_IMAGE_BINDING, BACKGROUND_SAMPLER_BINDING,
             &uxnEmuDescriptorSet, &graphicsDescriptorSet, {uxn_width, uxn_height, 0});
@@ -1127,51 +1139,15 @@ private:
     }
 
     void fastCopyDeviceMemToHost(UxnMemory* target) {
-        auto size = sizeof(UxnMemory::shared);       
-        
-        void* data;
-        if (vkMapMemory(ctx.device, fastSharedMemory, 0, size, 0, &data) != VK_SUCCESS) {
-            std::cerr << "Failed to map memory!" << std::endl;
-            return;
-        }
-        memcpy(&target->shared, data, size);
-        vkUnmapMemory(ctx.device, fastSharedMemory);
+        memcpy(&target->shared, sharedData, sizeof(UxnMemory::shared));
     }
 
     void fastCopyHostMemToDevice(const UxnMemory* source) {
-        auto size = sizeof(UxnMemory::shared);       
-        
-        void* data;
-        if (vkMapMemory(ctx.device, fastSharedMemory, 0, size, 0, &data) != VK_SUCCESS) {
-            std::cerr << "Failed to map memory!" << std::endl;
-            return;
-        }
-        memcpy(data, &source->shared, size);
-        vkUnmapMemory(ctx.device, fastSharedMemory);
-    }
-
-    void fastCopyPrivateDeviceMemToHost(UxnMemory* target) {
-        auto size = sizeof(UxnMemory::_private);       
-        
-        void* data;
-        if (vkMapMemory(ctx.device, fastPrivateMemory, 0, size, 0, &data) != VK_SUCCESS) {
-            std::cerr << "Failed to map memory!" << std::endl;
-            return;
-        }
-        memcpy(&target->_private, data, size);
-        vkUnmapMemory(ctx.device, fastPrivateMemory);
+        memcpy(sharedData, &source->shared, sizeof(UxnMemory::shared));
     }
 
     void fastCopyPrivateHostMemToDevice(const UxnMemory* source) {
-        auto size = sizeof(UxnMemory::_private);       
-        
-        void* data;
-        if (vkMapMemory(ctx.device, fastPrivateMemory, 0, size, 0, &data) != VK_SUCCESS) {
-            std::cerr << "Failed to map private memory!" << std::endl;
-            return;
-        }
-        memcpy(data, &source->_private, size);
-        vkUnmapMemory(ctx.device, fastPrivateMemory);
+        memcpy(privateData, &source->_private, sizeof(UxnMemory::_private));
     }
 
     void recordGraphicsCommandBuffer(VkCommandBuffer cmdBuffer, uint32_t imageIndex) {
@@ -1243,9 +1219,8 @@ private:
                               cmdBuffer);
     }   
 
-    void uxnEmuShader() {
-        // --- Uxn Emu submission ---
-        vkResetFences(ctx.device, 1, &uxnEmuFence);
+    void uxnEmuCommandBufferInit() {
+        // Reset and record compute command buffer once
         vkResetCommandBuffer(computeCommandBuffer, 0);
 
         VkCommandBufferBeginInfo beginInfo{};
@@ -1281,6 +1256,11 @@ private:
         if (vkEndCommandBuffer(computeCommandBuffer) != VK_SUCCESS) {
             throw std::runtime_error("failed to record command buffer!");
         }
+    }
+
+    void uxnEmuShader() {
+        // --- Uxn Emu submission ---
+        vkResetFences(ctx.device, 1, &uxnEmuFence);
 
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1375,6 +1355,8 @@ private:
 
         fastCopyPrivateHostMemToDevice(uxn->memory);
         fastCopyHostMemToDevice(uxn->memory);
+
+        uxnEmuCommandBufferInit();
 
         while (!glfwWindowShouldClose(ctx.window) && !uxn->programTerminated()) {
             iter_num++;
