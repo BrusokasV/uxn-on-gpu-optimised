@@ -136,6 +136,21 @@ SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device, VkSurface
     return details;
 }
 
+VkResult checkTimestampQueriesSupport(VkPhysicalDevice device) {
+    VkPhysicalDeviceProperties pProperties;
+
+    vkGetPhysicalDeviceProperties(device, &pProperties);
+
+    VkPhysicalDeviceLimits device_limits = pProperties.limits;
+
+    if (device_limits.timestampPeriod == 0 || !device_limits.timestampComputeAndGraphics)
+    {
+        return VK_ERROR_UNKNOWN;
+    }
+
+    return VK_SUCCESS;
+}
+
 VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
     for (const auto& availableFormat : availableFormats) {
         if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB &&
@@ -336,6 +351,23 @@ public:
         mainLoop();
         if (logMetrics) logger.logEnd();
         if (logMetrics) logger.printMetrics();
+        if (logMetrics) {
+            vm_runtime_total = callback_time + uxn_emu_time + blit_time + clear_time + io_time + graphics_time;
+            std::cout << "Callback percentage of total runtime: " << (callback_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average callback: " << (callback_time.count() / (iter_num - eval_num)) << " ns" << std::endl;
+            std::cout << "Eval percentage of total runtime: " << (uxn_emu_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average eval: " << (uxn_emu_time.count() / eval_num) << " ns" << std::endl;
+            std::cout << "  Eval \% on GPU: " << (uxn_emu_in_shader_time.count() * 100.0 / uxn_emu_time.count()) << "%" << std::endl;
+            std::cout << "Clear percentage of total runtime: " << (clear_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average IO: " << (clear_time.count() / clear_num) << " ns" << std::endl;
+            std::cout << "Blit percentage of total runtime: " << (blit_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average blit: " << (blit_time.count() / eval_num) << " ns" << std::endl;
+            std::cout << "  Blit \% on GPU: " << (blit_in_shader_time.count() * 100.0 / blit_time.count()) << "%" << std::endl;
+            std::cout << "IO percentage of total runtime: " << (io_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average IO: " << (io_time.count() / eval_num) << " ns" << std::endl;
+            std::cout << "Graphics percentage of total runtime: " << (graphics_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average graphics: " << (graphics_time.count() / graphics_num) << " ns" << std::endl;
+        }
         cleanup();
     }
 private:
@@ -377,6 +409,24 @@ private:
     VkFence computeInFlightFence;
     VkFence uxnEvaluationFence;
     VkFence blitFence;
+
+    std::chrono::nanoseconds vm_runtime_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds callback_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds uxn_emu_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds blit_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds clear_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds uxn_emu_in_shader_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds blit_in_shader_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds io_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds graphics_time = std::chrono::nanoseconds::zero();
+
+    int iter_num = 0;
+    int eval_num = 0;
+    int clear_num = 0;
+    int graphics_num = 0;
+
+    VkQueryPool queryPool;
+    uint64_t time_stamps[2];
 
     bool checkValidationLayerSupport() {
         uint32_t layerCount;
@@ -1021,6 +1071,23 @@ private:
         }
     }
 
+    void initQueryPools() {
+        LOG("..initQueryPools");
+        
+        if (checkTimestampQueriesSupport(ctx.physicalDevice) != VK_SUCCESS) {
+            throw std::runtime_error{"The selected device does not support timestamp queries!"};
+        }
+
+        VkQueryPoolCreateInfo pCreateInfo{};
+        pCreateInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        pCreateInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        pCreateInfo.queryCount = 2;
+
+        if (vkCreateQueryPool(ctx.device, &pCreateInfo, nullptr, &queryPool) != VK_SUCCESS) {
+            throw std::runtime_error("failed to init query pools!");
+        }
+    }
+
     void updateUxnConstants() {
         LOG("..updateUxnConstants");
 
@@ -1061,6 +1128,7 @@ private:
         initFrameBuffers();
         initGraphicsPipeline();
         initSync();
+        initQueryPools();
     }
 
     void copyDeviceMemToHost(UxnMemory* target) {
@@ -1200,12 +1268,17 @@ private:
         if (vkBeginCommandBuffer(computeCommandBuffer, &beginInfo) != VK_SUCCESS) {
             throw std::runtime_error("failed to begin recording command buffer!");
         }
+        vkCmdResetQueryPool(computeCommandBuffer, queryPool, 0, 2);
 
         vkCmdBindPipeline(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEvaluatePipeline);
         vkCmdBindDescriptorSets(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEvaluatePipelineLayout,
             0,1, &uxnDescriptorSet.set, 0, nullptr);
 
+        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool, 0);
+
         vkCmdDispatch(computeCommandBuffer, 1, 1, 1);
+
+        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 1);
 
         if (vkEndCommandBuffer(computeCommandBuffer) != VK_SUCCESS) {
             throw std::runtime_error("failed to record command buffer!");
@@ -1232,13 +1305,18 @@ private:
         if (vkBeginCommandBuffer(computeCommandBuffer, &beginInfo) != VK_SUCCESS) {
             throw std::runtime_error("failed to begin recording command buffer!");
         }
+        vkCmdResetQueryPool(computeCommandBuffer, queryPool, 0, 2);
 
         std::array descriptors = {uxnDescriptorSet.set, blitDescriptorSet.set};
         vkCmdBindPipeline(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blitPipeline);
         vkCmdBindDescriptorSets(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, blitPipelineLayout,
             0,descriptors.size(), descriptors.data(), 0, nullptr);
 
+        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool, 0);
+
         vkCmdDispatch(computeCommandBuffer, 1, 1, 1);
+
+        vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, 1);
 
         if (vkEndCommandBuffer(computeCommandBuffer) != VK_SUCCESS) {
             throw std::runtime_error("failed to record command buffer!");
@@ -1329,12 +1407,20 @@ private:
         auto last_frame_time = std::chrono::steady_clock::now();
         auto current_vector = uxn_device::Null;
         int callback_index = 0;
+        auto prev_time = std::chrono::steady_clock::now();
+
+        // timestamp period to convert to nanoseconds
+        VkPhysicalDeviceProperties deviceProps;
+        vkGetPhysicalDeviceProperties(ctx.physicalDevice, &deviceProps);
+        float timestampPeriod = deviceProps.limits.timestampPeriod;
 
         while (!glfwWindowShouldClose(ctx.window) && !uxn->programTerminated()) {
+            iter_num++;
             glfwPollEvents();
 
             if (!in_vector) {
                 // pick a new vector to execute
+                prev_time = std::chrono::steady_clock::now();
                 auto callback = CALLBACK_DEVICES[callback_index];
                 if (uxn->deviceCallbackVectors.contains(callback) && doCallback(callback, did_graphics)) {
                     uxn->prepareCallback(callback);
@@ -1343,25 +1429,56 @@ private:
                     current_vector = callback;
                 }
                 callback_index = (callback_index + 1) % static_cast<int>(CALLBACK_DEVICES.size());
+                callback_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
             }
 
             if (in_vector) {
                 // compute steps
+                eval_num++;
+                prev_time = std::chrono::steady_clock::now();
                 uxnEvalShader();
+                uxn_emu_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
+
+                // update timestamp results
+                vkGetQueryPoolResults(ctx.device, queryPool, 0, 2, sizeof(time_stamps), 
+                                    time_stamps, sizeof(uint64_t), 
+                                    VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+                
+                uint64_t elapsedEmuTicks = time_stamps[1] - time_stamps[0];
+                uxn_emu_in_shader_time += std::chrono::nanoseconds(static_cast<uint64_t>(elapsedEmuTicks * timestampPeriod));
+
                 // when it halts from an uxn eval, we need to figure out whenever or not
                 // to clear the screen before the blit shader
                 // the issue is: we need to clear the screen before we draw to it,
                 // and we should only draw onto the screen if it has been drawn
                 if (!cleared) {
+                    clear_num++;
+                    prev_time = std::chrono::steady_clock::now();
                     copyDeviceMemToHost(uxn->memory);
                     if (uxn->maskFlag(DRAW_PIXEL_FLAG) || uxn->maskFlag(DRAW_SPRITE_FLAG)) {
                         cleared = true;
                         clearImage(nullptr);
                     }
+                    clear_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
                 }
+                prev_time = std::chrono::steady_clock::now();
                 blitShader();
+                blit_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
+
+                // update timestamp results
+                vkGetQueryPoolResults(ctx.device, queryPool, 0, 2, sizeof(time_stamps), 
+                                    time_stamps, sizeof(uint64_t), 
+                                    VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+                uint64_t elapsedBlitTicks = time_stamps[1] - time_stamps[0];
+                blit_in_shader_time += std::chrono::nanoseconds(static_cast<uint64_t>(elapsedBlitTicks * timestampPeriod));
+
+                prev_time = std::chrono::steady_clock::now();
+
                 copyDeviceMemToHost(uxn->memory);
                 uxn->handleUxnIO();
+
+                io_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
 
                 // decide if the vector is finished
                 halt_code = uxn->memory->shared.halt;
@@ -1386,6 +1503,8 @@ private:
             auto now_time = std::chrono::steady_clock::now();
             auto elapsed_since_frame = std::chrono::duration_cast<std::chrono::milliseconds>(now_time - last_frame_time);
             if ((elapsed_since_frame >= frame_duration) && halt_code == 1 && did_graphics) {
+                graphics_num++;
+                prev_time = std::chrono::steady_clock::now();
                 transitionImagesToReadLayout(nullptr);
                 graphicsStep();
                 transitionImagesToEditLayout(nullptr);
@@ -1395,6 +1514,7 @@ private:
                 callback_index = 0;
                 did_graphics = false;
                 cleared = false;
+                graphics_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
             }
             if (!in_vector) current_vector = uxn_device::Null;
 
@@ -1420,6 +1540,7 @@ private:
         uxnDescriptorSet.destroy(ctx);
         blitDescriptorSet.destroy(ctx);
         graphicsDescriptorSet.destroy(ctx);
+        vkDestroyQueryPool(ctx.device, queryPool, nullptr);
         vkUnmapMemory(ctx.device, hostSrcMemory);
         vkDestroyBuffer(ctx.device, hostDestBuffer, nullptr);
         vkFreeMemory(ctx.device, hostDestMemory, nullptr);
