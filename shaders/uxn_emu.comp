@@ -12,14 +12,14 @@
 #extension GL_EXT_scalar_block_layout : enable
 #extension GL_ARB_gpu_shader_int64 : enable
 
-layout(buffer_reference, scalar) buffer Shared_UXN_Buffer {
+layout(buffer_reference, std430) buffer Shared_UXN_Buffer {
     uint pc;
     uint dev[256];  // device data
     uint flags;
     uint halt;
 };
 
-layout(buffer_reference, scalar) buffer Private_UXN_Buffer {
+layout(buffer_reference, std430) buffer Private_UXN_Buffer {
     uint ram[65536];
     uint wst[256];  // working stack
     uint pWst;
