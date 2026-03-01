@@ -74,6 +74,13 @@ struct State {
 #define DRAW_PIXEL_FLAG     0x100
 #define DRAW_SPRITE_FLAG    0x200
 
+const int blending[4][16] = int[4][16](
+    int[16](0, 0, 0, 0, 1, 0, 1, 1, 2, 2, 0, 2, 3, 3, 3, 0),
+    int[16](0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3),
+    int[16](1, 2, 3, 1, 1, 2, 3, 1, 1, 2, 3, 1, 1, 2, 3, 1),
+    int[16](2, 3, 1, 2, 2, 3, 1, 2, 2, 3, 1, 2, 2, 3, 1, 2)
+);
+
 // ---------------------- blit functions --------------------------------
 
 uint get_byte(uint addr) {
@@ -105,31 +112,12 @@ vec4 get_colour(uint colour_i) {
     return vec4(1.0, 0.0, 0.0, 1.0);
 }
 
-uint get_2bpp_colour_i(uint sprite_low, uint value) {
-    if (value > 3) return -1;
-
-    uint base_colour = (sprite_low >> 2) & 0x3;
-    uint mix_colour = sprite_low & 0x3;
-
-    if (value == 0 && (sprite_low == 0x5 || sprite_low == 0xA || sprite_low == 0xF)) {
-        return 4; // "none"
-    }
-
-    switch (value) {
-        case 0: return base_colour;
-        case 1: return mix_colour;
-        case 2: return (mix_colour == 0) ? ((base_colour + 1) % 4) : ((mix_colour + 1) % 4);
-        case 3: return (mix_colour == 0) ? ((base_colour + 2) % 4) : ((mix_colour + 2) % 4);
-    }
-    return 4;
-}
-
 vec4 colour_2bpp(uint sprite_low, uvec2 offset, ivec2 auto_xy, int auto_i) {
     // ---------------------- 2 bpp --------------------------------
     uint addr = get_short(SCREEN_ADDR) + offset.y * 2 + (auto_xy.y * auto_i * 16);
     uint row = uxn.ram[addr];
     uint draw_colour = (row >> (offset.x * 2)) & 0x3; // for 2 bpp
-    uint colour_i = get_2bpp_colour_i(sprite_low, draw_colour);
+    uint colour_i = blending[draw_colour][sprite_low];
 
     if (colour_i > 3) { return vec4(0, 0, 0, 0); }
 
@@ -142,24 +130,20 @@ vec4 colour_1bpp(uint sprite_low, uvec2 offset, ivec2 auto_xy, int auto_i) {
     uint row = uxn.ram[addr];
     uint draw_colour = (row >> offset.x) & 0x1; // for 1 bpp
 
-    // select colour - ToDo - fix this
-    //if (draw_colour != 0 && sprite_low == 0x0) {
-    //    return vec4(0, 0, 0, 0); // 'none'
-    //} else if (draw_colour == 0 && (sprite_low == 0x0 || sprite_low == 0x5 || sprite_low == 0xa || sprite_low == 0xf)) {
-    //    return vec4(0, 0, 0, 0); // 'clear' or 'none'
-    //}
+    // select colour
+    if (draw_colour != 0 && sprite_low == 0x0) {
+        return get_colour(0); // 'none'
+    } else if (draw_colour == 0 && (sprite_low == 0x0 || sprite_low == 0x5 || sprite_low == 0xa || sprite_low == 0xf)) {
+        return get_colour(0); // 'clear' or 'none'
+    }
     // Extract bits [3:2] for 1 or bits [1:0] for 0
     uint colour = (sprite_low >> (2 * (1 - draw_colour))) & 0x3;
     return get_colour(colour);
 }
 
-void fill_image(bool layer_is_foreground, vec4 colour) {
-    // get dimensions
-    uint w = get_short(SCREEN_WIDTH);
-    uint h = get_short(SCREEN_HEIGHT);
-
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
+void fill_image(bool layer_is_foreground, vec4 colour, uint sx, uint sy, uint ex, uint ey) {
+    for (uint y = sy; y < ey; y++) {
+        for (uint x = sx; x < ex; x++) {
             if (layer_is_foreground) {
                 imageStore(foreground, ivec2(x, y), colour);
             }
@@ -170,23 +154,37 @@ void fill_image(bool layer_is_foreground, vec4 colour) {
     }
 }
 
-void blit() {
-    // system colour set
-    if (mask(shared_uxn.flags, SYSTEM_COLOUR_FLAG)) {
-        fill_image(false, get_colour(0));
-    }
+void screen_deo() {
     // pixel requested
     if (mask(shared_uxn.flags, DRAW_PIXEL_FLAG)) {
         // colour
         uint pixel = get_byte(SCREEN_PIXEL);
-        vec4 colour = get_colour(pixel & 0x0f);
+        vec4 colour = get_colour(pixel & 0x3);
         
         // fill mode and layer
         bool fill_mode = mask(pixel, 0x80);
         bool layer_is_foreground = mask(pixel, 0x40);
         if (fill_mode) {
             // ---------------------- fill ---------------------------------
-            fill_image(layer_is_foreground, colour);
+            uint sx, sy, ex, ey;
+
+            if (mask(pixel, 0x10)) {
+                sx = 0;
+                ex = get_short(SCREEN_X);
+            }
+            else {
+                sx = get_short(SCREEN_X);
+                ex = get_short(SCREEN_WIDTH);
+            }
+            if (mask(pixel, 0x20)) {
+                sy = 0;
+                ey = get_short(SCREEN_Y);
+            }
+            else {
+                sy = get_short(SCREEN_Y);
+                ey = get_short(SCREEN_HEIGHT);
+            }
+            fill_image(layer_is_foreground, colour, sx, sy, ex, ey);
         }
         else {
             // ---------------------- pixel --------------------------------
@@ -243,20 +241,18 @@ void blit() {
                 for (int i = 0; i < auto_length; i ++) {
                     ivec2 o = (i * 8) * auto_xy.yx;
 
-                    // choosing the bpp mode
-                    vec4 v_colour_1 = colour_1bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0);
-
-                    vec4 v_colour_2 = colour_2bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0);
+                    // choosing the bpp mode - this is broken and I cannot fix it
+                    //vec4 v_colour = mode_is_2bpp ? colour_2bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0)
+                    //                     : colour_1bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0);
+                    vec4 v_colour = colour_1bpp(sprite_low, offset, auto_xy, auto_addr ? i : 0);
 
                     // if(v_colour == vec4(0, 0, 0, 0)) { continue; }
                     // ToDo - this is incorrect, as this prevents uxn from erasing old sprites. e.g. dvd and snake use that for clearing.
 
                     if (layer_is_foreground) {
-                        imageStore(foreground, coords + o, v_colour_1);
-                        //if (mode_is_2bpp) { imageStore(foreground, coords + o, v_colour_2); }
+                        imageStore(foreground, coords + o, v_colour);
                     } else {
-                        imageStore(background, coords + o, v_colour_1);
-                        //if (mode_is_2bpp) { imageStore(foreground, coords + o, v_colour_2); }
+                        imageStore(background, coords + o, v_colour);
                     }
                 }
             }
@@ -428,9 +424,18 @@ uint DEO(uint addr, uvec2 v, int _2) {
         halt = 0; // no need to halt
     }
 
-    //do not halt if we draw to the screen, call blit to handle it
-    if (addr == 0x2e || addr == 0x2f || ((addr >= 0x08) && (addr <= 0x0d))) {
-        blit();
+    // system colour set
+    if ((addr >= 0x08) && (addr <= 0x0d)) {
+        // get dimensions
+        uint w = get_short(SCREEN_WIDTH);
+        uint h = get_short(SCREEN_HEIGHT);
+        fill_image(false, get_colour(0), 0, 0, h, w);
+        halt = 0;
+    }
+
+    //do not halt if screen deo, use screen_deo to handle
+    if (addr == 0x2e || addr == 0x2f) {
+        screen_deo();
         halt = 0;
     }
 
