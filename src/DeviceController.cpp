@@ -352,17 +352,19 @@ public:
         if (logMetrics) logger.logEnd();
         if (logMetrics) logger.printMetrics();
         if (logMetrics) {
-            vm_runtime_total = callback_time + uxn_emu_time + blit_time + clear_time + io_time + graphics_time;
+            vm_runtime_total = callback_time + uxn_emu_time + blit_time + clear_time + copy_time + io_time + graphics_time;
             std::cout << "Callback percentage of total runtime: " << (callback_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "  Average callback: " << (callback_time.count() / (iter_num - eval_num)) << " ns" << std::endl;
             std::cout << "Eval percentage of total runtime: " << (uxn_emu_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "  Average eval: " << (uxn_emu_time.count() / eval_num) << " ns" << std::endl;
             std::cout << "  Eval \% on GPU: " << (uxn_emu_in_shader_time.count() * 100.0 / uxn_emu_time.count()) << "%" << std::endl;
             std::cout << "Clear percentage of total runtime: " << (clear_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-            std::cout << "  Average IO: " << (clear_time.count() / clear_num) << " ns" << std::endl;
+            std::cout << "  Average Clear: " << (clear_time.count() / clear_num) << " ns" << std::endl;
             std::cout << "Blit percentage of total runtime: " << (blit_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "  Average blit: " << (blit_time.count() / eval_num) << " ns" << std::endl;
             std::cout << "  Blit \% on GPU: " << (blit_in_shader_time.count() * 100.0 / blit_time.count()) << "%" << std::endl;
+            std::cout << "Copy percentage of total runtime: " << (copy_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average Copy: " << (copy_time.count() / eval_num) << " ns" << std::endl;
             std::cout << "IO percentage of total runtime: " << (io_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "  Average IO: " << (io_time.count() / eval_num) << " ns" << std::endl;
             std::cout << "Graphics percentage of total runtime: " << (graphics_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
@@ -417,6 +419,7 @@ private:
     std::chrono::nanoseconds clear_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds uxn_emu_in_shader_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds blit_in_shader_time = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds copy_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds io_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds graphics_time = std::chrono::nanoseconds::zero();
 
@@ -1476,6 +1479,10 @@ private:
                 prev_time = std::chrono::steady_clock::now();
 
                 copyDeviceMemToHost(uxn->memory);
+
+                copy_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
+                prev_time = std::chrono::steady_clock::now();
+
                 uxn->handleUxnIO();
 
                 io_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
