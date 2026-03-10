@@ -316,7 +316,7 @@ Resource::Resource(
     const void* bufferData,
     bool isSSBO,
     bool isVertexShaderAccessible,
-    bool isTransferSource
+    bool isHostMapped
 ) {
     this->type = isSSBO ? SSBO : Buffer;
     this->binding = binding;
@@ -347,8 +347,9 @@ Resource::Resource(
         // used as a vertex buffer for vert shader
         usage = usage | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
     }
-    if (isTransferSource) {
-        usage = usage | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if (isHostMapped) {
+        // will be persistently mapped and host visible
+        properties = properties | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
     }
 
     createBuffer(ctx, bufferSize, usage, properties, this->data.buffer._, this->data.buffer.memory);

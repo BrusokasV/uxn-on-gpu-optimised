@@ -23,6 +23,8 @@ int WIDTH = 512;
 int HEIGHT = 512;
 
 // -- Bindings --
+#define SHARED_UXN_BINDING          0
+#define PRIVATE_UXN_BINDING         1
 #define BACKGROUND_IMAGE_BINDING    2
 #define BACKGROUND_SAMPLER_BINDING  4
 #define FOREGROUND_IMAGE_BINDING    3
@@ -388,18 +390,13 @@ private:
 
     DescriptorSetWrapper uxnEmuDescriptorSet;
     DescriptorSetWrapper graphicsDescriptorSet;
+    Resource sharedUxnResource;
+    Resource privateUxnResource;
     Resource backgroundImageResource;
     Resource foregroundImageResource;
     Resource vertexResource;
 
-    VkBuffer fastSharedBuffer;
-    VkDeviceMemory fastSharedMemory;
-    VkDeviceAddress fastSharedAddress;
-    void* sharedData;
-    VkBuffer fastPrivateBuffer;
-    VkDeviceMemory fastPrivateMemory;
-    VkDeviceAddress fastPrivateAddress;
-    void* privateData;
+    void* sharedUxnP;
 
     VkSemaphore imageAvailableSemaphore;
     VkSemaphore renderFinishedSemaphore;
@@ -1018,33 +1015,15 @@ private:
         uxnEmuDescriptorSet = DescriptorSetWrapper();
         graphicsDescriptorSet = DescriptorSetWrapper();
 
-        // buffers accessible through device addresses
-        createBuffer(ctx, sizeof(UxnMemory::shared), 
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR, 
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
-            fastSharedBuffer, fastSharedMemory);
-
-        VkBufferDeviceAddressInfoKHR fastSharedInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
-        fastSharedInfo.buffer = fastSharedBuffer;
-        fastSharedAddress = vkGetBufferDeviceAddress(ctx.device, &fastSharedInfo);      
-        
-        if (vkMapMemory(ctx.device, fastSharedMemory, 0, sizeof(UxnMemory::shared), 0, &sharedData) != VK_SUCCESS) {
-            std::cerr << "Failed to map shared memory!" << std::endl;
-            return;
-        }
-
-        createBuffer(ctx, sizeof(UxnMemory::_private), 
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR, 
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, 
-            fastPrivateBuffer, fastPrivateMemory);
-
-        VkBufferDeviceAddressInfoKHR fastPrivateInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
-        fastPrivateInfo.buffer = fastPrivateBuffer;
-        fastPrivateAddress = vkGetBufferDeviceAddress(ctx.device, &fastPrivateInfo);
-
-        if (vkMapMemory(ctx.device, fastPrivateMemory, 0, sizeof(UxnMemory::_private), 0, &privateData) != VK_SUCCESS) {
-            std::cerr << "Failed to map private memory!" << std::endl;
-            return;
+        // resource creation
+        sharedUxnResource = Resource(ctx, SHARED_UXN_BINDING, &uxnEmuDescriptorSet,
+            sizeof(UxnMemory::shared), &uxn->memory->shared,
+            true, false, true);
+        privateUxnResource = Resource(ctx, PRIVATE_UXN_BINDING, &uxnEmuDescriptorSet,
+            sizeof(UxnMemory::_private), &uxn->memory->_private,
+            true, false, false);
+        if (vkMapMemory(ctx.device, sharedUxnResource.data.buffer.memory, 0, sizeof(UxnMemory::shared), 0, &sharedUxnP) != VK_SUCCESS) {
+            std::cerr << "Failed to map memory!" << std::endl;
         }
 
         backgroundImageResource = Resource(ctx, BACKGROUND_IMAGE_BINDING, BACKGROUND_SAMPLER_BINDING,
@@ -1139,15 +1118,11 @@ private:
     }
 
     void fastCopyDeviceMemToHost(UxnMemory* target) {
-        memcpy(&target->shared, sharedData, sizeof(UxnMemory::shared));
+        memcpy(&target->shared, sharedUxnP, sizeof(UxnMemory::shared));
     }
 
     void fastCopyHostMemToDevice(const UxnMemory* source) {
-        memcpy(sharedData, &source->shared, sizeof(UxnMemory::shared));
-    }
-
-    void fastCopyPrivateHostMemToDevice(const UxnMemory* source) {
-        memcpy(privateData, &source->_private, sizeof(UxnMemory::_private));
+        memcpy(sharedUxnP, &source->shared, sizeof(UxnMemory::shared));
     }
 
     void recordGraphicsCommandBuffer(VkCommandBuffer cmdBuffer, uint32_t imageIndex) {
@@ -1233,19 +1208,6 @@ private:
         vkCmdBindPipeline(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEmuPipeline);
         vkCmdBindDescriptorSets(computeCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, uxnEmuPipelineLayout,
             0,1, &uxnEmuDescriptorSet.set, 0, nullptr);
-
-        struct PushConstantData {
-            VkDeviceAddress sharedUxnAddress;
-            VkDeviceAddress privateUxnAddress;
-        } pushData;
-
-        pushData.sharedUxnAddress = fastSharedAddress;
-        pushData.privateUxnAddress = fastPrivateAddress;
-
-        vkCmdPushConstants(computeCommandBuffer, uxnEmuPipelineLayout, 
-            VK_SHADER_STAGE_COMPUTE_BIT, 
-            0, sizeof(PushConstantData), 
-            &pushData);
 
         vkCmdWriteTimestamp(computeCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool, 0);
 
@@ -1353,9 +1315,6 @@ private:
         vkGetPhysicalDeviceProperties(ctx.physicalDevice, &deviceProps);
         float timestampPeriod = deviceProps.limits.timestampPeriod;
 
-        fastCopyPrivateHostMemToDevice(uxn->memory);
-        fastCopyHostMemToDevice(uxn->memory);
-
         uxnEmuCommandBufferInit();
 
         while (!glfwWindowShouldClose(ctx.window) && !uxn->programTerminated()) {
@@ -1460,15 +1419,14 @@ private:
         uxnEmuDescriptorSet.destroy(ctx);
         graphicsDescriptorSet.destroy(ctx);
         vkDestroyQueryPool(ctx.device, queryPool, nullptr);
-        vkDestroyBuffer(ctx.device, fastSharedBuffer, nullptr);
-        vkFreeMemory(ctx.device, fastSharedMemory, nullptr);
-        vkDestroyBuffer(ctx.device, fastPrivateBuffer, nullptr);
-        vkFreeMemory(ctx.device, fastPrivateMemory, nullptr);
+        vkUnmapMemory(ctx.device, sharedUxnResource.data.buffer.memory);
         vkDestroySemaphore(ctx.device, renderFinishedSemaphore, nullptr);
         vkDestroySemaphore(ctx.device, imageAvailableSemaphore, nullptr);
         vkDestroyFence(ctx.device, graphicsFence, nullptr);
         vkDestroyFence(ctx.device, computeInFlightFence, nullptr);
         vkDestroyFence(ctx.device, uxnEmuFence, nullptr);
+        sharedUxnResource.destroy();
+        privateUxnResource.destroy();
         backgroundImageResource.destroy();
         foregroundImageResource.destroy();
         vertexResource.destroy();
