@@ -352,7 +352,9 @@ public:
         if (logMetrics) logger.logEnd();
         if (logMetrics) logger.printMetrics();
         if (logMetrics) {
-            vm_runtime_total = callback_time + uxn_emu_time + blit_time + clear_time + copy_time + io_time + graphics_time;
+            vm_runtime_total = poll_time + callback_time + uxn_emu_time + blit_time + clear_time + copy_time + io_time + graphics_time;
+            std::cout << "Poll percentage of total runtime: " << (poll_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
+            std::cout << "  Average poll: " << (poll_time.count() / (iter_num - eval_num)) << " ns" << std::endl;
             std::cout << "Callback percentage of total runtime: " << (callback_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
             std::cout << "  Average callback: " << (callback_time.count() / (iter_num - eval_num)) << " ns" << std::endl;
             std::cout << "Eval percentage of total runtime: " << (uxn_emu_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
@@ -413,6 +415,7 @@ private:
     VkFence blitFence;
 
     std::chrono::nanoseconds vm_runtime_total = std::chrono::nanoseconds::zero();
+    std::chrono::nanoseconds poll_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds callback_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds uxn_emu_time = std::chrono::nanoseconds::zero();
     std::chrono::nanoseconds blit_time = std::chrono::nanoseconds::zero();
@@ -1419,7 +1422,9 @@ private:
 
         while (!glfwWindowShouldClose(ctx.window) && !uxn->programTerminated()) {
             iter_num++;
+            prev_time = std::chrono::steady_clock::now();
             glfwPollEvents();
+            poll_time += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - prev_time);
 
             if (!in_vector) {
                 // pick a new vector to execute
