@@ -38,11 +38,8 @@ void createBuffer(
     vkGetBufferMemoryRequirements(ctx.device, buffer, &memRequirements);
 
     VkMemoryAllocateInfo allocInfo{};
-    VkMemoryAllocateFlagsInfoKHR flags_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO_KHR};
-    flags_info.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT_KHR;
     allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocInfo.allocationSize = memRequirements.size;
-    allocInfo.pNext = &flags_info;
     allocInfo.memoryTypeIndex = findMemoryType(ctx,memRequirements.memoryTypeBits,properties);
 
     if (vkAllocateMemory(ctx.device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
@@ -342,14 +339,17 @@ Resource::Resource(
     if (isSSBO) {
         // used as a storage buffer for compute shader
         usage = usage | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        if (isHostMapped) {
+            // will be persistently mapped and host visible
+            properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        }
+        else {
+            properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+        }
     }
     if (isVertexShaderAccessible) {
         // used as a vertex buffer for vert shader
         usage = usage | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    }
-    if (isHostMapped) {
-        // will be persistently mapped and host visible
-        properties = properties | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
     }
 
     createBuffer(ctx, bufferSize, usage, properties, this->data.buffer._, this->data.buffer.memory);

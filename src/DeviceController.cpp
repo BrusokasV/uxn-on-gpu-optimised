@@ -349,9 +349,9 @@ public:
         if (logMetrics) logger.logStart();
         LOG("Starting VM execution:");
 
-        std::thread event_thread(&DeviceController::mainLoop, this);
+        std::thread main_thread(&DeviceController::mainLoop, this);
         eventLoop();
-        event_thread.join();
+        main_thread.join();
 
 
         // mainLoop();
@@ -990,8 +990,8 @@ private:
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelineLayoutInfo.setLayoutCount = descriptorCount;
         pipelineLayoutInfo.pSetLayouts = descriptorLayouts;
-        pipelineLayoutInfo.pushConstantRangeCount = 1;
-        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+        pipelineLayoutInfo.pushConstantRangeCount = 0;
+        pipelineLayoutInfo.pPushConstantRanges = nullptr;
 
         if (vkCreatePipelineLayout(ctx.device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
             throw std::runtime_error("failed to create compute pipeline layout!");
