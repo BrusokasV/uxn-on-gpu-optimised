@@ -23,6 +23,7 @@ int WIDTH = 512;
 int HEIGHT = 512;
 
 // -- Bindings --
+#define UXN_RAM_BINDING             0
 #define BACKGROUND_IMAGE_BINDING    2
 #define BACKGROUND_SAMPLER_BINDING  4
 #define FOREGROUND_IMAGE_BINDING    3
@@ -398,6 +399,13 @@ private:
     VkBuffer fastPrivateBuffer;
     VkDeviceMemory fastPrivateMemory;
     VkDeviceAddress fastPrivateAddress;
+
+    struct uxnRAMStruct {
+        glm::uint ram[65536];
+    } uxnRAM;
+
+    VkBuffer uxnRAMBuffer;
+    VkDeviceMemory uxnRAMMemory;
 
     VkSemaphore imageAvailableSemaphore;
     VkSemaphore renderFinishedSemaphore;
@@ -797,7 +805,7 @@ private:
         LOG("..initDescriptorPool");
 
         // todo figure out what descriptorCount actually means, and why it needs to be set to 2
-        std::array<VkDescriptorPoolSize, 4> poolSizes{};
+        std::array<VkDescriptorPoolSize, 5> poolSizes{};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         poolSizes[0].descriptorCount = 2;
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -806,6 +814,8 @@ private:
         poolSizes[2].descriptorCount = 2;
         poolSizes[3].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[3].descriptorCount = 2;
+        poolSizes[4].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[4].descriptorCount = 2;
 
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1034,6 +1044,39 @@ private:
         VkBufferDeviceAddressInfoKHR fastPrivateInfo{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO_KHR};
         fastPrivateInfo.buffer = fastPrivateBuffer;
         fastPrivateAddress = vkGetBufferDeviceAddress(ctx.device, &fastPrivateInfo);
+
+        // device-local UBO
+        createBuffer(ctx, sizeof(uxnRAMStruct),
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            uxnRAMBuffer, uxnRAMMemory);
+        memcpy(uxnRAM.ram, uxn->memory->_private.ram, sizeof(uxnRAM.ram));
+
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingMemory;
+        createBuffer(ctx, sizeof(uxnRAMStruct),
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            stagingBuffer, stagingMemory);
+
+        void* stagingData;
+        vkMapMemory(ctx.device, stagingMemory, 0, sizeof(uxnRAMStruct), 0, &stagingData);
+        memcpy(stagingData, &uxnRAM, sizeof(uxnRAMStruct));
+        vkUnmapMemory(ctx.device, stagingMemory);
+
+        copyBuffer(ctx, stagingBuffer, uxnRAMBuffer, sizeof(uxnRAMStruct));
+
+        vkDestroyBuffer(ctx.device, stagingBuffer, nullptr);
+        vkFreeMemory(ctx.device, stagingMemory, nullptr);
+
+        VkDescriptorSetLayoutBinding b{};
+        b.binding = UXN_RAM_BINDING;
+        b.descriptorCount = 1;
+        b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        b.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        uxnEmuDescriptorSet.addBinding(b);
+
+        uxnEmuDescriptorSet.addVertexBufferWrite(uxnRAMBuffer, sizeof(uxnRAMStruct), UXN_RAM_BINDING);
 
         backgroundImageResource = Resource(ctx, BACKGROUND_IMAGE_BINDING, BACKGROUND_SAMPLER_BINDING,
             &uxnEmuDescriptorSet, &graphicsDescriptorSet, {uxn_width, uxn_height, 0});
@@ -1482,6 +1525,8 @@ private:
         vkFreeMemory(ctx.device, fastSharedMemory, nullptr);
         vkDestroyBuffer(ctx.device, fastPrivateBuffer, nullptr);
         vkFreeMemory(ctx.device, fastPrivateMemory, nullptr);
+        vkDestroyBuffer(ctx.device, uxnRAMBuffer, nullptr);
+        vkFreeMemory(ctx.device, uxnRAMMemory, nullptr);
         vkDestroySemaphore(ctx.device, renderFinishedSemaphore, nullptr);
         vkDestroySemaphore(ctx.device, imageAvailableSemaphore, nullptr);
         vkDestroyFence(ctx.device, graphicsFence, nullptr);

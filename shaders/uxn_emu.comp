@@ -9,23 +9,26 @@
 // uncomment this line if you are getting VK_TIMEOUT errors
 //#define MAX_STEPS 100000
 #extension GL_EXT_buffer_reference : require
-#extension GL_EXT_scalar_block_layout : enable
 #extension GL_ARB_gpu_shader_int64 : enable
 
-layout(buffer_reference, scalar) buffer Shared_UXN_Buffer {
+layout(buffer_reference, std430) buffer Shared_UXN_Buffer {
     uint pc;
     uint dev[256];  // device data
     uint flags;
     uint halt;
 };
 
-layout(buffer_reference, scalar) buffer Private_UXN_Buffer {
+layout(buffer_reference, std430) buffer Private_UXN_Buffer {
     uint ram[65536];
     uint wst[256];  // working stack
     uint pWst;
     uint rst[256];  // return stack
     uint pRst;
 };
+
+layout(set = 0, binding = 0) uniform uxnRAMStruct {
+    uint ram[65536];
+} uxnRAM;
 
 layout(push_constant) uniform PushConstants {
     uint64_t sharedUxnAddress;
@@ -441,7 +444,7 @@ uint uxn_eval(State state) {
     // check for shutdown
 	if((shared_uxn.pc == 0) || (shared_uxn.dev[0x0f] != 0)) return 5;
 	// select instruction
-	switch(uxn.ram[shared_uxn.pc++] & 0xff) {
+	switch(uxnRAM.ram[shared_uxn.pc++] & 0xff) {
     /* BRK */ case 0x00: return 1;
     /* JCI */ case 0x20:
                 if(uxn.wst[--uxn.pWst] != 0) { JMI(state); }
