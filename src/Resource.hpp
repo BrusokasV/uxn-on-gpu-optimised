@@ -106,7 +106,7 @@ public:
         const void* bufferData,
         bool isSSBO,
         bool isVertexShaderAccessible,
-        bool isHostMapped
+        bool isTransferSource
     );
 
     Resource(
