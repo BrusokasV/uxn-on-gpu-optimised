@@ -17,6 +17,7 @@
 #include "shaders/vert.h"
 #include "shaders/frag.h"
 #include "shaders/uxn_emu.h"
+#include "shaders/benchmark.h"
 
 // Window Dimensions
 int WIDTH = 512;
@@ -357,16 +358,10 @@ public:
         if (logMetrics) logger.logEnd();
         if (logMetrics) logger.printMetrics();
         if (logMetrics) {
-            vm_runtime_total = callback_time + uxn_emu_time + io_time + graphics_time;
-            std::cout << "Callback percentage of total runtime: " << (callback_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-            std::cout << "  Average callback: " << (callback_time.count() / (iter_num - eval_num)) << " ns" << std::endl;
-            std::cout << "Eval percentage of total runtime: " << (uxn_emu_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-            std::cout << "  Average eval: " << (uxn_emu_time.count() / eval_num) << " ns" << std::endl;
-            std::cout << "  Eval \% on GPU: " << (uxn_emu_in_shader_time.count() * 100.0 / uxn_emu_time.count()) << "%" << std::endl;
-            std::cout << "IO percentage of total runtime: " << (io_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-            std::cout << "  Average IO: " << (io_time.count() / eval_num) << " ns" << std::endl;
-            std::cout << "Graphics percentage of total runtime: " << (graphics_time.count() * 100.0 / vm_runtime_total.count()) << "%" << std::endl;
-            std::cout << "  Average graphics: " << (graphics_time.count() / graphics_num) << " ns" << std::endl;
+            std::cout << "Emu runtime: " << (uxn_emu_time.count()) << " ns" << std::endl;
+            std::cout << "Emu Submission Overhead: " << (uxn_emu_time.count() - uxn_emu_in_shader_time.count()) << std::endl;
+            std::cout << "Emu on GPU: " << (uxn_emu_in_shader_time.count()) << std::endl;
+            std::cout << "Emu \% on GPU: " << (uxn_emu_in_shader_time.count() * 100.0 / uxn_emu_time.count()) << "%" << std::endl;
         }
         cleanup();
     }
@@ -1130,7 +1125,7 @@ private:
         initDescriptorPool();
         updateUxnConstants();
         initResources();
-        initComputePipeline(shaders_uxn_emu_spv, shaders_uxn_emu_spv_len,
+        initComputePipeline(shaders_benchmark_spv, shaders_benchmark_spv_len,
             uxnEmuPipeline, uxnEmuPipelineLayout, &uxnEmuDescriptorSet.layout, 1);
         initFrameBuffers();
         initGraphicsPipeline();
