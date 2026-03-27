@@ -34,23 +34,45 @@ void main() {
     uint x = 0;
     uint y = 0;
 
-    for (uint i = 0; i < 500; i++) {
-        for (uint j = 0; j < 65536; j++) {
+    for (uint i = 0; i < 250; i++) {
+        for (uint j = 0; j < 65529; j++) {
             // branching code, commented out when not in use
-            y = i % 2;
-            if (y == 0) {
-               x = i + j;
-               uxn.ram[j] = x;
-            }
-            else {
-               x = i + j;
-               uxn.ram[j] = x;
+            y = (i + j) % 7;
+            switch (y) {
+                case 0:
+                    x = uxn.ram[j] * 2;
+                    uxn.ram[j+2] = x;
+                    break;
+                case 1:
+                    x = uxn.ram[j] * 2;
+                    uxn.ram[j+4] = x;
+                    break;
+                case 2:
+                    x = uxn.ram[j] * 2;
+                    uxn.ram[j+6] = x;
+                    break;
+                case 3:
+                    x = uxn.ram[j] * 2;
+                    uxn.ram[j+1] = x;
+                    break;
+                case 4:
+                    x = uxn.ram[j] * 2;
+                    uxn.ram[j+7] = x;
+                    break;
+                case 5:
+                    x = uxn.ram[j] * 2;
+                    uxn.ram[j+5] = x;
+                    break;
+                case 6:
+                    x = uxn.ram[j] * 2;
+                    uxn.ram[j+3] = x;
+                    break;
             }
 
             // non-branching code, commented out when not in use
-            y = i % 2;
-            x = i + j;
-            uxn.ram[j] = x;
+            y = (i + j) % 7;
+            x = uxn.ram[j] * 2;
+            uxn.ram[j+y] = x;
         }
     }
 

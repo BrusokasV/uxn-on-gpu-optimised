@@ -10,7 +10,7 @@ cd ${SHADER_DIR} || exit
 for shader in $UXN_SHADERS; do
   echo "Compiling $shader"
   # Compile
-  glslangValidator -Od -V --target-env vulkan1.2 "${shader}".comp -o "${shader}".spv
+  glslangValidator -V --target-env vulkan1.2 "${shader}".comp -o "${shader}".spv
 
   # Patch the shader
   # spirv-as  --target-env vulkan1.2 <(sed -f shader_patch.sed <(spirv-dis "${shader}".spv)) -o "${shader}".spv
