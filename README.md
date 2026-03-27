@@ -1,10 +1,10 @@
 # Uxn VM on GPU
 
-This project is an implementation of the [Uxn](https://wiki.xxiivv.com/site/uxn.html) virtual 
-machine that runs almost completely on the GPU! 
+This project is an optimisation of [Uxn on GPU](https://github.com/AndreiGhita2002/uxn-on-gpu), an implementation of the [Uxn](https://wiki.xxiivv.com/site/uxn.html) virtual machine that runs almost completely on the GPU! 
 
-More precisely, the main Uxn runtime runs on a compute shader which communicates directly with 
-the graphical pipeline.
+This project primarily aims to improve the performance of the previous implementation rather than address bugs.
+
+This README largely follows the structure and steps outlined in the original README.md.
 
 ## Compilation
 
@@ -26,7 +26,7 @@ You will need the following installed on your system:
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/uxn-on-gpu.git
+git clone https://github.com/BrusokasV/uxn-on-gpu-optimised.git
 cd uxn-on-gpu
 
 # Create a build directory
@@ -39,13 +39,15 @@ cmake ..
 cmake --build .
 ```
 
+Note: the original implementation has been developed on MacOS, while this project was undertaken from a Windows machine. I am only able to guarantee compilation on Windows.
+
 # Usage:
 ``uxn-on-gpu [-dm] <filename>``
 
-- `<filename>` - Uxn .rom file you want to run inside the VM. 
-There is a great selection of programs found on the internet in the `/uxn-programs/` directory.
-Recommended examples: ``snake.rom`` and ``dvd.rom``.
+- `<filename>` - Uxn .rom file you want to run inside the VM.
+  There is a great selection of programs found on the internet in the `/uxn-programs/` directory.
+  Recommended examples: ``snake.rom``, ``dvd.rom``, ``bunnymark.rom``.
 - `-d` - enable debug more; additional print-outs for internal operations.
-- `-m` - enable performance metrics; calculates average FPS, minimum and maximum frame time as well as total program duration. 
+- `-m` - enable performance metrics; calculates average FPS, minimum and maximum frame time as well as total program duration, contributions of each stage of the main loop to the runtime.
 
 Make sure you check the README inside `uxn-programs` as not all programs are yet supported by the VM!

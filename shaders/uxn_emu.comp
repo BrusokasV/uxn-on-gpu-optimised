@@ -2,6 +2,7 @@
 //
 // Created by Andrei Ghita
 // Based on the UXN emulator from https://wiki.xxiivv.com/site/uxn.html
+// Optimised by Vladislav Brusokas
 //
 
 // how many instructions should the VM do before halting
